@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.streamlit/secrets.toml
+
+# Temp / local
+_tmp_*
+*.ttf.bak
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
