@@ -360,6 +360,15 @@ def _inject_app_theme(theme: str) -> None:
             border: 1px solid var(--cps-border) !important;
             border-radius: 0.35rem;
           }}
+          section[data-testid="stSidebar"] div[data-testid="stButton"] button {{
+            white-space: nowrap !important;
+            font-size: 0.78rem !important;
+            line-height: 1.2 !important;
+            padding-left: 0.4rem !important;
+            padding-right: 0.4rem !important;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }}
           @media (max-width: 768px) {{
             h1 {{ font-size: 1.35rem; margin-bottom: 0.25rem; }}
             [data-testid="column"] {{ min-width: 100% !important; }}
@@ -564,9 +573,9 @@ with st.sidebar:
         help="Именно этот текст запишется в метаданные шрифта.",
     )
     st.caption("Быстрый выбор:")
-    preset_cols = st.columns(4)
+    preset_cols = st.columns(2)
     for i, name in enumerate(STYLE_NAMES):
-        preset_cols[i % 4].button(
+        preset_cols[i % 2].button(
             name,
             key=f"style_preset_{name}",
             use_container_width=True,
