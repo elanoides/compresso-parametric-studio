@@ -13,6 +13,7 @@ from engine.exporter import (
     STYLE_NAMES,
     build_glyphs_json,
     build_ttf_bytes,
+    normalize_style_name,
     style_slug,
 )
 from engine.geometry import RenderParams, params_cache_key, with_params
@@ -98,8 +99,6 @@ def _ensure_defaults() -> None:
         st.session_state.setdefault("kern_delta_in", -0.5)
         st.session_state.setdefault("word_text", DEFAULT_PHRASE)
         st.session_state.setdefault("ui_theme", "dark")
-        st.session_state.setdefault("style_select", DEFAULT_STYLE)
-        st.session_state.setdefault("font_style_custom", "")
         return
     for key, value in REGULAR.items():
         st.session_state.setdefault(key, value)
@@ -110,27 +109,16 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("kern_delta_in", -0.5)
     st.session_state.setdefault("word_text", DEFAULT_PHRASE)
     st.session_state.setdefault("ui_theme", "dark")
-    st.session_state.setdefault("style_select", DEFAULT_STYLE)
-    st.session_state.setdefault("font_style_custom", "")
 
 
 def _resolved_font_style() -> str:
-    """Return the export style name from the sidebar widgets."""
-    choice = str(st.session_state.get("style_select", DEFAULT_STYLE))
-    if choice == "Custom…":
-        custom = str(st.session_state.get("font_style_custom") or "").strip()
-        return custom or DEFAULT_STYLE
-    if choice in STYLE_NAMES:
-        return choice
-    return str(st.session_state.get("font_style") or DEFAULT_STYLE).strip() or DEFAULT_STYLE
+    """Return the exact style name the user typed/selected for export."""
+    return normalize_style_name(str(st.session_state.get("font_style", DEFAULT_STYLE)))
 
 
-def _on_style_change() -> None:
-    """Keep font_style in sync and drop a stale TTF when the name changes."""
-    st.session_state["font_style"] = _resolved_font_style()
-    st.session_state.pop("ttf_bytes", None)
-    st.session_state["ttf_ok"] = False
-    st.session_state.pop("ttf_style", None)
+def _apply_style_preset(name: str) -> None:
+    """Callback: put a preset style name into the free-text field."""
+    st.session_state["font_style"] = name
 
 
 def _theme_palette(name: str | None = None) -> dict[str, str]:
@@ -284,6 +272,29 @@ def _normalize_kern_pair(raw: str) -> str | None:
     if len(s) != 2:
         return None
     return s
+
+
+def _load_kern_pair_into_editor(pair: str, delta: float) -> None:
+    """Callback: fill editor widgets before they render."""
+    st.session_state["kern_pair_in"] = pair
+    st.session_state["kern_delta_in"] = float(delta)
+
+
+def _delete_kern_pair(pair: str) -> None:
+    """Callback: remove a saved kerning pair."""
+    pairs: dict[str, float] = dict(st.session_state.get("kerning_pairs") or {})
+    pairs.pop(pair, None)
+    st.session_state["kerning_pairs"] = pairs
+
+
+def _save_draft_kern_pair() -> None:
+    """Callback: persist the current draft pair/delta."""
+    draft = _normalize_kern_pair(st.session_state.get("kern_pair_in") or "")
+    if draft is None:
+        return
+    pairs: dict[str, float] = dict(st.session_state.get("kerning_pairs") or {})
+    pairs[draft] = float(st.session_state.get("kern_delta_in", 0.0))
+    st.session_state["kerning_pairs"] = pairs
 
 
 def _inject_app_theme(theme: str) -> None:
@@ -546,21 +557,23 @@ with st.sidebar:
     )
 
     st.header("Начертание")
-    st.selectbox(
-        "Название стиля (для TTF/JSON)",
-        options=list(STYLE_NAMES) + ["Custom…"],
-        key="style_select",
-        on_change=_on_style_change,
+    st.text_input(
+        "Название начертания (попадёт в TTF/JSON как есть)",
+        key="font_style",
+        placeholder="Например Expanded или Display",
+        help="Именно этот текст запишется в метаданные шрифта.",
     )
-    if st.session_state["style_select"] == "Custom…":
-        st.text_input(
-            "Своё название",
-            key="font_style_custom",
-            placeholder="Например Display",
-            on_change=_on_style_change,
+    st.caption("Быстрый выбор:")
+    preset_cols = st.columns(4)
+    for i, name in enumerate(STYLE_NAMES):
+        preset_cols[i % 4].button(
+            name,
+            key=f"style_preset_{name}",
+            use_container_width=True,
+            on_click=_apply_style_preset,
+            args=(name,),
         )
-    st.session_state["font_style"] = _resolved_font_style()
-    st.caption(f"В экспорт: **{st.session_state['font_style']}**")
+    st.caption(f"В экспорт: **{_resolved_font_style()}**")
 
     st.header("Module")
     st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
@@ -582,7 +595,6 @@ with st.sidebar:
 
 params = _current_params()
 font_style = _resolved_font_style()
-st.session_state["font_style"] = font_style
 
 tab_inspect, tab_words = st.tabs(["Инспектор глифа", "Наборщик текста"])
 
@@ -676,14 +688,12 @@ with tab_words:
             )
             draft_pair = _normalize_kern_pair(st.session_state.get("kern_pair_in") or "")
             draft_delta = float(st.session_state.get("kern_delta_in", 0.0))
-            if st.button("Сохранить пару", use_container_width=True, disabled=draft_pair is None):
-                if draft_pair is None:
-                    st.warning("Нужно ровно 2 символа.")
-                else:
-                    pairs: dict[str, float] = dict(st.session_state.get("kerning_pairs") or {})
-                    pairs[draft_pair] = draft_delta
-                    st.session_state["kerning_pairs"] = pairs
-                    st.rerun()
+            st.button(
+                "Сохранить пару",
+                use_container_width=True,
+                disabled=draft_pair is None,
+                on_click=_save_draft_kern_pair,
+            )
 
         with kc2:
             # Live pair preview: saved kerning + current draft override
@@ -716,14 +726,20 @@ with tab_words:
                 r1, r2, r3, r4 = st.columns([1, 2, 1, 1])
                 r1.code(pair)
                 r2.write(f"{delta:+.2f} cols")
-                if r3.button("✎", key=f"edit_kern_{pair}", help="Подставить в редактор"):
-                    st.session_state["kern_pair_in"] = pair
-                    st.session_state["kern_delta_in"] = float(delta)
-                    st.rerun()
-                if r4.button("✕", key=f"del_kern_{pair}", use_container_width=True):
-                    current.pop(pair, None)
-                    st.session_state["kerning_pairs"] = current
-                    st.rerun()
+                r3.button(
+                    "✎",
+                    key=f"edit_kern_{pair}",
+                    help="Подставить в редактор",
+                    on_click=_load_kern_pair_into_editor,
+                    args=(pair, float(delta)),
+                )
+                r4.button(
+                    "✕",
+                    key=f"del_kern_{pair}",
+                    use_container_width=True,
+                    on_click=_delete_kern_pair,
+                    args=(pair,),
+                )
         else:
             st.info("Сохранённых пар пока нет — двигайте слайдер, смотрите превью, затем «Сохранить».")
 
@@ -744,7 +760,7 @@ with tab_words:
         preview_scale=font_size,
     )
     export_params = with_params(
-        params,
+        params_live,
         show_guides=False,
         show_grid=False,
         preview_scale=1.0,
@@ -765,6 +781,7 @@ with tab_words:
     )
     show_svg(text_svg_preview, height=min(max(embed_h, 160), 640))
 
+    kern_count = len(export_params.kerning_pairs)
     col_svg, col_json, col_ttf = st.columns(3)
     with col_svg:
         st.download_button(
@@ -793,8 +810,10 @@ with tab_words:
                 file_name=f"Compresso-Parametric-{style_slug(font_style)}.ttf",
                 mime="font/ttf",
                 use_container_width=True,
-                key=f"dl_ttf_{style_slug(font_style)}_{len(ttf_bytes)}",
+                key=f"dl_ttf_{style_slug(font_style)}_{kern_count}_{len(ttf_bytes)}",
             )
-            st.caption(f"Метаданные стиля: **{font_style}**")
+            st.caption(
+                f"Начертание: **{font_style}** · кернинг: **{kern_count}** пар"
+            )
         except Exception as exc:  # noqa: BLE001 — surface in UI
             st.error(f"TTF: {exc}")

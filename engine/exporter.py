@@ -99,6 +99,12 @@ def style_slug(style: str) -> str:
     return slug or "Regular"
 
 
+def normalize_style_name(style: str | None) -> str:
+    """User-facing style name written into the font; never silently swap the label."""
+    name = (style or "").strip()
+    return name or DEFAULT_STYLE
+
+
 def _style_tokens(style: str) -> set[str]:
     cleaned = "".join(c.lower() if c.isalnum() else " " for c in style)
     return {tok for tok in cleaned.split() if tok}
@@ -159,16 +165,8 @@ def _build_kern_fea(
 ) -> str | None:
     """Build OpenType ``kern`` feature source, or ``None`` if no pairs."""
     lines: list[str] = []
-    for pair, delta_cols in p.kerning_pairs:
-        if len(pair) != 2:
-            continue
-        left, right = pair[0], pair[1]
-        if left not in name_by_char or right not in name_by_char:
-            continue
-        value = _kern_delta_fu(delta_cols, p, scale)
-        if value == 0:
-            continue
-        lines.append(f"  pos {name_by_char[left]} {name_by_char[right]} {value};")
+    for left_name, right_name, value in _iter_kern_values(p, name_by_char, scale):
+        lines.append(f"  pos {left_name} {right_name} {value};")
     if not lines:
         return None
     body = "\n".join(lines)
@@ -180,6 +178,58 @@ def _build_kern_fea(
         f"{body}\n"
         "} kern;\n"
     )
+
+
+def _iter_kern_values(
+    p: RenderParams,
+    name_by_char: dict[str, str],
+    scale: float,
+) -> list[tuple[str, str, int]]:
+    """Resolved glyph-name kerning triples in font units."""
+    out: list[tuple[str, str, int]] = []
+    seen: set[tuple[str, str]] = set()
+    for pair, delta_cols in p.kerning_pairs:
+        if len(pair) != 2:
+            continue
+        left, right = pair[0], pair[1]
+        if left not in name_by_char or right not in name_by_char:
+            continue
+        value = _kern_delta_fu(delta_cols, p, scale)
+        if value == 0:
+            continue
+        key = (name_by_char[left], name_by_char[right])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((key[0], key[1], value))
+    return out
+
+
+def _add_legacy_kern_table(
+    font,
+    p: RenderParams,
+    name_by_char: dict[str, str],
+    scale: float,
+) -> int:
+    """Write a classic ``kern`` table for apps that ignore GPOS."""
+    from fontTools.ttLib import newTable
+    from fontTools.ttLib.tables._k_e_r_n import KernTable_format_0
+
+    pairs = {
+        (left, right): value
+        for left, right, value in _iter_kern_values(p, name_by_char, scale)
+    }
+    if not pairs:
+        return 0
+    subtable = KernTable_format_0()
+    subtable.format = 0
+    subtable.coverage = 1  # horizontal
+    subtable.kernTable = pairs
+    kern = newTable("kern")
+    kern.version = 0
+    kern.kernTables = [subtable]
+    font["kern"] = kern
+    return len(pairs)
 
 
 def _glyph_metrics(
@@ -211,7 +261,8 @@ def build_ttf_bytes(
     style: str = DEFAULT_STYLE,
 ) -> bytes:
     """Compile all studio glyphs into a TTF binary with current oval params."""
-    style_name = (style or DEFAULT_STYLE).strip() or DEFAULT_STYLE
+    style_name = normalize_style_name(style)
+    family_name = (family or FAMILY).strip() or FAMILY
     cap_span = max((BASELINE - BODY_TOP) * p.step_y, 1.0)
     upm = 1000
     scale = 750.0 / cap_span
@@ -271,18 +322,28 @@ def build_ttf_bytes(
     ascender = max(ascender, all_ymax, 1)
     descender = min(descender, all_ymin, -1)
 
-    ps_safe = "".join(c for c in style_name if c.isalnum()) or "Regular"
+    # Keep the user-authored style string everywhere. For non-RIBBI faces,
+    # also uniquify the Windows family so styles do not collapse onto Regular.
+    ribbi = {"regular", "bold", "italic", "bolditalic"}
+    style_key = "".join(ch.lower() for ch in style_name if ch.isalnum())
+    if style_key in ribbi:
+        win_family = family_name
+    else:
+        win_family = f"{family_name} {style_name}"
+    win_style = style_name
+
+    ps_safe = "".join(c for c in f"{family_name}-{style_name}" if c.isalnum()) or "Font"
     weight, width, fs_selection = resolve_style_metrics(style_name)
     fb.setupHorizontalHeader(ascent=ascender, descent=descender)
     fb.setupNameTable(
         {
-            "familyName": family,
-            "styleName": style_name,
-            "uniqueFontIdentifier": f"{family}-{style_name}",
-            "fullName": f"{family} {style_name}",
-            "psName": family.replace(" ", "") + "-" + ps_safe,
+            "familyName": win_family,
+            "styleName": win_style,
+            "uniqueFontIdentifier": f"{family_name}-{style_name}",
+            "fullName": f"{family_name} {style_name}",
+            "psName": ps_safe[:63],
             "version": "Version 1.000",
-            "typographicFamily": family,
+            "typographicFamily": family_name,
             "typographicSubfamily": style_name,
         }
     )
@@ -309,6 +370,7 @@ def build_ttf_bytes(
     kern_fea = _build_kern_fea(p, name_by_char, scale)
     if kern_fea:
         fb.addOpenTypeFeatures(kern_fea)
+    _add_legacy_kern_table(fb.font, p, name_by_char, scale)
 
     buf = BytesIO()
     fb.save(buf)
@@ -322,9 +384,10 @@ def build_glyphs_json(
     style: str = DEFAULT_STYLE,
 ) -> str:
     """Export current glyph matrices, kerning and render params as JSON."""
+    style_name = normalize_style_name(style)
     payload = {
         "family": family,
-        "style": style or DEFAULT_STYLE,
+        "style": style_name,
         "params": {
             "rx": p.rx,
             "ry": p.ry,
