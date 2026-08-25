@@ -76,6 +76,41 @@ def _draw_ellipse(pen: TTGlyphPen, cx: float, cy: float, rx: float, ry: float) -
     pen.closePath()
 
 
+def _kern_delta_fu(delta_cols: float, p: RenderParams, scale: float) -> int:
+    """Convert studio kerning (column units) to font units."""
+    return int(round(float(delta_cols) * p.step_x * scale))
+
+
+def _build_kern_fea(
+    p: RenderParams,
+    name_by_char: dict[str, str],
+    scale: float,
+) -> str | None:
+    """Build OpenType ``kern`` feature source, or ``None`` if no pairs."""
+    lines: list[str] = []
+    for pair, delta_cols in p.kerning_pairs:
+        if len(pair) != 2:
+            continue
+        left, right = pair[0], pair[1]
+        if left not in name_by_char or right not in name_by_char:
+            continue
+        value = _kern_delta_fu(delta_cols, p, scale)
+        if value == 0:
+            continue
+        lines.append(f"  pos {name_by_char[left]} {name_by_char[right]} {value};")
+    if not lines:
+        return None
+    body = "\n".join(lines)
+    return (
+        "languagesystem DFLT dflt;\n"
+        "languagesystem latn dflt;\n"
+        "languagesystem cyrl dflt;\n"
+        "feature kern {\n"
+        f"{body}\n"
+        "} kern;\n"
+    )
+
+
 def _glyph_metrics(
     ch: str, p: RenderParams, scale: float
 ) -> tuple[int, int, int, int, int]:
@@ -186,6 +221,10 @@ def build_ttf_bytes(
         achVendID="CMPS",
     )
     fb.setupPost()
+
+    kern_fea = _build_kern_fea(p, name_by_char, scale)
+    if kern_fea:
+        fb.addOpenTypeFeatures(kern_fea)
 
     buf = BytesIO()
     fb.save(buf)
