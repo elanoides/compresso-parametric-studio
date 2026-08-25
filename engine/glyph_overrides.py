@@ -26,14 +26,13 @@ GLYPH_OVERRIDES: dict[str, list[tuple[int, int]]] = {
     "0": _rows(
         [".###.", "#...#"] + _R("#...#", 16) + ["#...#", ".###."]
     ),
-    # Ф capital (9 cols, gap 3): tip + bowls + lower stem to baseline only (no descender 24+)
-    # Proportions from TYPE TOOL: short tip above, bowls, stem continues to baseline
-    "Ф": _rows(
-        _R("....#....", 2)
-        + ["#########"]
+    # Ф capital (9 cols): stem tip ABOVE Cap-Height (rows 2–3), bowls from row 4, lower stem to baseline
+    "Ф": [(4, 2), (4, 3)]
+    + _rows(
+        ["#########"]
         + _R("#...#...#", 11)
         + ["#########"]
-        + _R("....#....", 5)
+        + _R("....#....", 7)
     ),
     # Ц: stems 0/4, base, thick right tail
     "Ц": _rows(_R("#...#", 18) + ["#####", "#####"])
