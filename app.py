@@ -13,6 +13,7 @@ from engine.exporter import (
     STYLE_NAMES,
     build_glyphs_json,
     build_ttf_bytes,
+    style_slug,
 )
 from engine.geometry import RenderParams, params_cache_key, with_params
 from engine.glyphs import (
@@ -97,6 +98,8 @@ def _ensure_defaults() -> None:
         st.session_state.setdefault("kern_delta_in", -0.5)
         st.session_state.setdefault("word_text", DEFAULT_PHRASE)
         st.session_state.setdefault("ui_theme", "dark")
+        st.session_state.setdefault("style_select", DEFAULT_STYLE)
+        st.session_state.setdefault("font_style_custom", "")
         return
     for key, value in REGULAR.items():
         st.session_state.setdefault(key, value)
@@ -107,6 +110,27 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("kern_delta_in", -0.5)
     st.session_state.setdefault("word_text", DEFAULT_PHRASE)
     st.session_state.setdefault("ui_theme", "dark")
+    st.session_state.setdefault("style_select", DEFAULT_STYLE)
+    st.session_state.setdefault("font_style_custom", "")
+
+
+def _resolved_font_style() -> str:
+    """Return the export style name from the sidebar widgets."""
+    choice = str(st.session_state.get("style_select", DEFAULT_STYLE))
+    if choice == "Custom…":
+        custom = str(st.session_state.get("font_style_custom") or "").strip()
+        return custom or DEFAULT_STYLE
+    if choice in STYLE_NAMES:
+        return choice
+    return str(st.session_state.get("font_style") or DEFAULT_STYLE).strip() or DEFAULT_STYLE
+
+
+def _on_style_change() -> None:
+    """Keep font_style in sync and drop a stale TTF when the name changes."""
+    st.session_state["font_style"] = _resolved_font_style()
+    st.session_state.pop("ttf_bytes", None)
+    st.session_state["ttf_ok"] = False
+    st.session_state.pop("ttf_style", None)
 
 
 def _theme_palette(name: str | None = None) -> dict[str, str]:
@@ -228,6 +252,31 @@ def _cached_text_svg(text: str, key: tuple) -> str:
         kerning_pairs=key[16],
     )
     return render_text_svg(text, p)
+
+
+@st.cache_data(show_spinner="Сборка TTF…")
+def _cached_ttf_bytes(key: tuple, style: str) -> bytes:
+    """Build TTF from a cache key + style name (always matches current export)."""
+    p = RenderParams(
+        rx=key[0],
+        ry=key[1],
+        stroke_width=key[2],
+        fill_opacity=key[3],
+        step_x=key[4],
+        step_y=key[5],
+        letter_spacing=key[6],
+        col_scale=key[7],
+        row_scale=key[8],
+        fill=key[9],
+        stroke=key[10],
+        background=key[11],
+        show_guides=False,
+        show_grid=False,
+        padding=key[14],
+        preview_scale=1.0,
+        kerning_pairs=key[16],
+    )
+    return build_ttf_bytes(p, family=FAMILY, style=style)
 
 
 def _normalize_kern_pair(raw: str) -> str | None:
@@ -497,20 +546,21 @@ with st.sidebar:
     )
 
     st.header("Начертание")
-    style_choice = st.selectbox(
+    st.selectbox(
         "Название стиля (для TTF/JSON)",
         options=list(STYLE_NAMES) + ["Custom…"],
-        index=list(STYLE_NAMES).index(st.session_state["font_style"])
-        if st.session_state["font_style"] in STYLE_NAMES
-        else len(STYLE_NAMES),
         key="style_select",
+        on_change=_on_style_change,
     )
-    if style_choice == "Custom…":
-        custom = st.text_input("Своё название", value=st.session_state.get("font_style_custom", "Regular"))
-        st.session_state["font_style_custom"] = custom
-        st.session_state["font_style"] = (custom or "Regular").strip() or "Regular"
-    else:
-        st.session_state["font_style"] = style_choice
+    if st.session_state["style_select"] == "Custom…":
+        st.text_input(
+            "Своё название",
+            key="font_style_custom",
+            placeholder="Например Display",
+            on_change=_on_style_change,
+        )
+    st.session_state["font_style"] = _resolved_font_style()
+    st.caption(f"В экспорт: **{st.session_state['font_style']}**")
 
     st.header("Module")
     st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
@@ -531,7 +581,8 @@ with st.sidebar:
     st.color_picker("Background", key="background")
 
 params = _current_params()
-font_style = str(st.session_state["font_style"])
+font_style = _resolved_font_style()
+st.session_state["font_style"] = font_style
 
 tab_inspect, tab_words = st.tabs(["Инспектор глифа", "Наборщик текста"])
 
@@ -726,30 +777,24 @@ with tab_words:
     with col_json:
         json_blob = build_glyphs_json(export_params, family=FAMILY, style=font_style)
         st.download_button(
-            label="Экспорт JSON",
+            label=f"Экспорт JSON · {font_style}",
             data=json_blob.encode("utf-8"),
-            file_name=f"compresso_{font_style.lower()}.json",
+            file_name=f"compresso_{style_slug(font_style).lower()}.json",
             mime="application/json",
             use_container_width=True,
+            key=f"dl_json_{style_slug(font_style)}",
         )
     with col_ttf:
-        if st.button("Собрать TTF", use_container_width=True):
-            try:
-                st.session_state["ttf_bytes"] = build_ttf_bytes(
-                    export_params, family=FAMILY, style=font_style
-                )
-                st.session_state["ttf_ok"] = True
-                st.session_state["ttf_style"] = font_style
-            except Exception as exc:  # noqa: BLE001 — surface in UI
-                st.session_state["ttf_ok"] = False
-                st.error(f"TTF: {exc}")
-        ttf_bytes = st.session_state.get("ttf_bytes")
-        if ttf_bytes and st.session_state.get("ttf_ok"):
-            style_slug = str(st.session_state.get("ttf_style", font_style)).replace(" ", "")
+        try:
+            ttf_bytes = _cached_ttf_bytes(params_cache_key(export_params), font_style)
             st.download_button(
-                label=f"Скачать TTF · {st.session_state.get('ttf_style', font_style)}",
+                label=f"Скачать TTF · {font_style}",
                 data=ttf_bytes,
-                file_name=f"Compresso-Parametric-{style_slug}.ttf",
+                file_name=f"Compresso-Parametric-{style_slug(font_style)}.ttf",
                 mime="font/ttf",
                 use_container_width=True,
+                key=f"dl_ttf_{style_slug(font_style)}_{len(ttf_bytes)}",
             )
+            st.caption(f"Метаданные стиля: **{font_style}**")
+        except Exception as exc:  # noqa: BLE001 — surface in UI
+            st.error(f"TTF: {exc}")

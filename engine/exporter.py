@@ -35,6 +35,40 @@ STYLE_NAMES: tuple[str, ...] = (
     "Italic",
 )
 
+# OpenType weight / width so Windows does not collapse styles into one face.
+_WEIGHT_BY_TOKEN: dict[str, int] = {
+    "thin": 100,
+    "extralight": 200,
+    "ultralight": 200,
+    "light": 300,
+    "regular": 400,
+    "normal": 400,
+    "book": 400,
+    "medium": 500,
+    "semibold": 600,
+    "demibold": 600,
+    "bold": 700,
+    "extrabold": 800,
+    "ultrabold": 800,
+    "black": 900,
+    "heavy": 900,
+}
+
+_WIDTH_BY_TOKEN: dict[str, int] = {
+    "ultracondensed": 1,
+    "extracondensed": 2,
+    "condensed": 3,
+    "narrow": 3,
+    "semicondensed": 4,
+    "normal": 5,
+    "regular": 5,
+    "semiexpanded": 6,
+    "expanded": 7,
+    "wide": 7,
+    "extraexpanded": 8,
+    "ultraexpanded": 9,
+}
+
 _PUNCT_NAMES: dict[str, str] = {
     ".": "period",
     ",": "comma",
@@ -56,6 +90,43 @@ def ps_glyph_name(ch: str) -> str:
     if ("A" <= ch <= "Z") or ("0" <= ch <= "9"):
         return ch
     return f"uni{ord(ch):04X}"
+
+
+def style_slug(style: str) -> str:
+    """Filesystem-safe style token for download filenames."""
+    raw = (style or DEFAULT_STYLE).strip() or DEFAULT_STYLE
+    slug = "".join(c if c.isalnum() else "-" for c in raw).strip("-")
+    return slug or "Regular"
+
+
+def _style_tokens(style: str) -> set[str]:
+    cleaned = "".join(c.lower() if c.isalnum() else " " for c in style)
+    return {tok for tok in cleaned.split() if tok}
+
+
+def resolve_style_metrics(style: str) -> tuple[int, int, int]:
+    """Return ``(usWeightClass, usWidthClass, fsSelection)`` for a style name."""
+    tokens = _style_tokens(style)
+    weight = 400
+    for tok, value in _WEIGHT_BY_TOKEN.items():
+        if tok in tokens:
+            weight = value
+            break
+    width = 5
+    for tok, value in _WIDTH_BY_TOKEN.items():
+        if tok in tokens:
+            width = value
+            break
+
+    # fsSelection bits: 0 italic, 5 bold, 6 regular
+    fs_selection = 0
+    if "italic" in tokens or "oblique" in tokens:
+        fs_selection |= 0x01
+    if weight >= 700:
+        fs_selection |= 0x20
+    elif "italic" not in tokens and "oblique" not in tokens:
+        fs_selection |= 0x40
+    return weight, width, fs_selection
 
 
 def _ellipse_points(
@@ -201,6 +272,7 @@ def build_ttf_bytes(
     descender = min(descender, all_ymin, -1)
 
     ps_safe = "".join(c for c in style_name if c.isalnum()) or "Regular"
+    weight, width, fs_selection = resolve_style_metrics(style_name)
     fb.setupHorizontalHeader(ascent=ascender, descent=descender)
     fb.setupNameTable(
         {
@@ -210,6 +282,8 @@ def build_ttf_bytes(
             "fullName": f"{family} {style_name}",
             "psName": family.replace(" ", "") + "-" + ps_safe,
             "version": "Version 1.000",
+            "typographicFamily": family,
+            "typographicSubfamily": style_name,
         }
     )
     fb.setupOS2(
@@ -218,9 +292,19 @@ def build_ttf_bytes(
         sTypoLineGap=0,
         usWinAscent=ascender,
         usWinDescent=abs(descender),
+        usWeightClass=weight,
+        usWidthClass=width,
+        fsSelection=fs_selection,
         achVendID="CMPS",
     )
     fb.setupPost()
+
+    mac_style = 0
+    if fs_selection & 0x20:
+        mac_style |= 0x01  # bold
+    if fs_selection & 0x01:
+        mac_style |= 0x02  # italic
+    fb.font["head"].macStyle = mac_style
 
     kern_fea = _build_kern_fea(p, name_by_char, scale)
     if kern_fea:
