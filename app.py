@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from engine.exporter import (
     DEFAULT_STYLE,
@@ -48,7 +49,7 @@ st.set_page_config(
     page_title="Compresso Parametric Studio",
     page_icon="▣",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -182,6 +183,162 @@ def _normalize_kern_pair(raw: str) -> str | None:
     return s
 
 
+def _inject_mobile_sidebar() -> None:
+    """Overlay sidebar + hamburger toggle on narrow screens."""
+    components.html(
+        """
+        <script>
+        (() => {
+          const doc = window.parent.document;
+          const win = window.parent;
+          const MQ = "(max-width: 768px)";
+          const STYLE_ID = "cps-mobile-sidebar-style";
+          const BTN_ID = "cps-mobile-menu-btn";
+          const BACKDROP_ID = "cps-mobile-backdrop";
+
+          const css = `
+            @media ${MQ} {
+              section[data-testid="stSidebar"] {
+                position: fixed !important;
+                top: 0 !important;
+                left: 0 !important;
+                height: 100vh !important;
+                width: min(88vw, 320px) !important;
+                z-index: 100000 !important;
+                transform: translateX(-105%) !important;
+                transition: transform 0.28s ease !important;
+                box-shadow: none !important;
+              }
+              section[data-testid="stSidebar"].cps-mobile-open {
+                transform: translateX(0) !important;
+                box-shadow: 4px 0 24px rgba(0, 0, 0, 0.55) !important;
+              }
+              [data-testid="collapsedControl"] {
+                display: none !important;
+              }
+              .main .block-container {
+                padding-top: 3.6rem !important;
+              }
+              #${BTN_ID} {
+                position: fixed;
+                top: 0.55rem;
+                left: 0.55rem;
+                z-index: 100001;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.45rem 0.85rem;
+                border: 1px solid #333;
+                border-radius: 0.45rem;
+                background: #101010;
+                color: #fff;
+                font: 600 0.9rem/1.2 system-ui, sans-serif;
+                cursor: pointer;
+                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+              }
+              #${BTN_ID}:active {
+                transform: scale(0.98);
+              }
+              #${BACKDROP_ID} {
+                position: fixed;
+                inset: 0;
+                z-index: 99999;
+                background: rgba(0, 0, 0, 0.55);
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.28s ease;
+              }
+              #${BACKDROP_ID}.open {
+                opacity: 1;
+                pointer-events: auto;
+              }
+            }
+            @media (min-width: 769px) {
+              #${BTN_ID}, #${BACKDROP_ID} {
+                display: none !important;
+              }
+              section[data-testid="stSidebar"] {
+                transform: none !important;
+              }
+            }
+          `;
+
+          function sidebar() {
+            return doc.querySelector('section[data-testid="stSidebar"]');
+          }
+
+          function isMobile() {
+            return win.matchMedia(MQ).matches;
+          }
+
+          function setOpen(open) {
+            const sb = sidebar();
+            const backdrop = doc.getElementById(BACKDROP_ID);
+            const btn = doc.getElementById(BTN_ID);
+            if (!sb) return;
+            sb.classList.toggle("cps-mobile-open", open);
+            backdrop?.classList.toggle("open", open);
+            if (btn) btn.textContent = open ? "✕ Закрыть" : "☰ Параметры";
+          }
+
+          function toggle() {
+            const sb = sidebar();
+            if (!sb) return;
+            setOpen(!sb.classList.contains("cps-mobile-open"));
+          }
+
+          function ensureStyles() {
+            if (doc.getElementById(STYLE_ID)) return;
+            const style = doc.createElement("style");
+            style.id = STYLE_ID;
+            style.textContent = css;
+            doc.head.appendChild(style);
+          }
+
+          function ensureButton() {
+            let btn = doc.getElementById(BTN_ID);
+            if (!btn) {
+              btn = doc.createElement("button");
+              btn.id = BTN_ID;
+              btn.type = "button";
+              btn.textContent = "☰ Параметры";
+              btn.addEventListener("click", toggle);
+              doc.body.appendChild(btn);
+            }
+            btn.style.display = isMobile() ? "inline-flex" : "none";
+          }
+
+          function ensureBackdrop() {
+            let backdrop = doc.getElementById(BACKDROP_ID);
+            if (!backdrop) {
+              backdrop = doc.createElement("div");
+              backdrop.id = BACKDROP_ID;
+              backdrop.addEventListener("click", () => setOpen(false));
+              doc.body.appendChild(backdrop);
+            }
+            backdrop.style.display = isMobile() ? "block" : "none";
+          }
+
+          function syncLayout() {
+            ensureStyles();
+            ensureButton();
+            ensureBackdrop();
+            if (!isMobile()) {
+              setOpen(false);
+              return;
+            }
+            setOpen(false);
+          }
+
+          syncLayout();
+          win.addEventListener("resize", syncLayout);
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 # ----- UI -----
 _ensure_defaults()
 
@@ -191,10 +348,16 @@ st.markdown(
       .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
       h1 { letter-spacing: 0.04em; }
       div[data-testid="stSidebar"] { background: #101010; }
+      @media (max-width: 768px) {
+        h1 { font-size: 1.35rem; margin-bottom: 0.25rem; }
+        [data-testid="column"] { min-width: 100% !important; }
+      }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+_inject_mobile_sidebar()
 
 st.title("Compresso Parametric Studio")
 st.caption(
