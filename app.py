@@ -45,6 +45,37 @@ REGULAR: dict[str, float | int | str] = {
 DEFAULT_PHRASE = "НАДЁЖНЫЕ И РАБОТЯЩИЕ"
 DEFAULT_FONT_SIZE = 0.38  # preview_scale for word composer
 
+THEMES: dict[str, dict[str, str]] = {
+    "dark": {
+        "app_bg": "#000000",
+        "sidebar_bg": "#101010",
+        "secondary_bg": "#101010",
+        "text": "#FFFFFF",
+        "muted": "#AAAAAA",
+        "border": "#333333",
+        "fill": "#FFFFFF",
+        "stroke": "#FFFFFF",
+        "background": "#000000",
+        "mobile_btn_bg": "#101010",
+        "mobile_btn_fg": "#FFFFFF",
+        "mobile_btn_border": "#333333",
+    },
+    "light": {
+        "app_bg": "#FFFFFF",
+        "sidebar_bg": "#F5F5F5",
+        "secondary_bg": "#F0F0F0",
+        "text": "#111111",
+        "muted": "#555555",
+        "border": "#DDDDDD",
+        "fill": "#000000",
+        "stroke": "#000000",
+        "background": "#FFFFFF",
+        "mobile_btn_bg": "#FFFFFF",
+        "mobile_btn_fg": "#111111",
+        "mobile_btn_border": "#DDDDDD",
+    },
+}
+
 st.set_page_config(
     page_title="Compresso Parametric Studio",
     page_icon="▣",
@@ -65,6 +96,7 @@ def _ensure_defaults() -> None:
         st.session_state.setdefault("kern_pair_in", "АВ")
         st.session_state.setdefault("kern_delta_in", -0.5)
         st.session_state.setdefault("word_text", DEFAULT_PHRASE)
+        st.session_state.setdefault("ui_theme", "dark")
         return
     for key, value in REGULAR.items():
         st.session_state.setdefault(key, value)
@@ -74,12 +106,34 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("kern_pair_in", "АВ")
     st.session_state.setdefault("kern_delta_in", -0.5)
     st.session_state.setdefault("word_text", DEFAULT_PHRASE)
+    st.session_state.setdefault("ui_theme", "dark")
+
+
+def _theme_palette(name: str | None = None) -> dict[str, str]:
+    """Return UI + preview colors for the active theme."""
+    key = name or str(st.session_state.get("ui_theme", "dark"))
+    return THEMES.get(key, THEMES["dark"])
+
+
+def _apply_theme_colors(theme: str | None = None) -> None:
+    """Sync glyph preview colors with the selected UI theme."""
+    palette = _theme_palette(theme)
+    st.session_state["fill"] = palette["fill"]
+    st.session_state["stroke"] = palette["stroke"]
+    st.session_state["background"] = palette["background"]
+
+
+def _on_theme_change() -> None:
+    _apply_theme_colors(str(st.session_state.get("ui_theme", "dark")))
 
 
 def _reset_to_regular() -> None:
     """Callback: write Regular values into session_state before widgets render."""
     for key, value in REGULAR.items():
+        if key in {"fill", "stroke", "background"}:
+            continue
         st.session_state[key] = value
+    _apply_theme_colors()
     st.session_state["_regular_version"] = REGULAR_VERSION
     st.session_state["font_size"] = DEFAULT_FONT_SIZE
 
@@ -183,6 +237,79 @@ def _normalize_kern_pair(raw: str) -> str | None:
     return s
 
 
+def _inject_app_theme(theme: str) -> None:
+    """Inject Streamlit UI colors for dark/light mode."""
+    t = _theme_palette(theme)
+    st.markdown(
+        f"""
+        <style>
+          :root {{
+            --cps-app-bg: {t["app_bg"]};
+            --cps-sidebar-bg: {t["sidebar_bg"]};
+            --cps-secondary-bg: {t["secondary_bg"]};
+            --cps-text: {t["text"]};
+            --cps-muted: {t["muted"]};
+            --cps-border: {t["border"]};
+            --cps-mobile-btn-bg: {t["mobile_btn_bg"]};
+            --cps-mobile-btn-fg: {t["mobile_btn_fg"]};
+            --cps-mobile-btn-border: {t["mobile_btn_border"]};
+          }}
+          .stApp {{
+            background-color: var(--cps-app-bg) !important;
+            color: var(--cps-text) !important;
+          }}
+          .block-container {{ padding-top: 1.2rem; padding-bottom: 2rem; }}
+          h1, h2, h3, h4, h5, h6, p, label, span, div {{
+            color: inherit;
+          }}
+          h1 {{ letter-spacing: 0.04em; color: var(--cps-text) !important; }}
+          section[data-testid="stSidebar"] {{
+            background: var(--cps-sidebar-bg) !important;
+            border-right: 1px solid var(--cps-border);
+          }}
+          section[data-testid="stSidebar"] * {{
+            color: var(--cps-text);
+          }}
+          [data-testid="stCaptionContainer"], .stCaption {{
+            color: var(--cps-muted) !important;
+          }}
+          [data-baseweb="tab"] {{
+            color: var(--cps-text) !important;
+          }}
+          [data-baseweb="tab"][aria-selected="true"] {{
+            border-bottom-color: var(--cps-text) !important;
+          }}
+          div[data-baseweb="input"] > div,
+          div[data-baseweb="select"] > div,
+          textarea,
+          input {{
+            background-color: var(--cps-secondary-bg) !important;
+            color: var(--cps-text) !important;
+            border-color: var(--cps-border) !important;
+          }}
+          [data-testid="stExpander"] details {{
+            background-color: var(--cps-secondary-bg);
+            border: 1px solid var(--cps-border);
+            border-radius: 0.5rem;
+          }}
+          [data-testid="stCode"] pre {{
+            background-color: var(--cps-secondary-bg) !important;
+            color: var(--cps-text) !important;
+          }}
+          iframe {{
+            border: 1px solid var(--cps-border) !important;
+            border-radius: 0.35rem;
+          }}
+          @media (max-width: 768px) {{
+            h1 {{ font-size: 1.35rem; margin-bottom: 0.25rem; }}
+            [data-testid="column"] {{ min-width: 100% !important; }}
+          }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _inject_mobile_sidebar() -> None:
     """Overlay sidebar + hamburger toggle on narrow screens."""
     components.html(
@@ -228,10 +355,10 @@ def _inject_mobile_sidebar() -> None:
                 align-items: center;
                 gap: 0.35rem;
                 padding: 0.45rem 0.85rem;
-                border: 1px solid #333;
+                border: 1px solid var(--cps-mobile-btn-border, #333);
                 border-radius: 0.45rem;
-                background: #101010;
-                color: #fff;
+                background: var(--cps-mobile-btn-bg, #101010);
+                color: var(--cps-mobile-btn-fg, #fff);
                 font: 600 0.9rem/1.2 system-ui, sans-serif;
                 cursor: pointer;
                 box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
@@ -342,21 +469,7 @@ def _inject_mobile_sidebar() -> None:
 # ----- UI -----
 _ensure_defaults()
 
-st.markdown(
-    """
-    <style>
-      .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
-      h1 { letter-spacing: 0.04em; }
-      div[data-testid="stSidebar"] { background: #101010; }
-      @media (max-width: 768px) {
-        h1 { font-size: 1.35rem; margin-bottom: 0.25rem; }
-        [data-testid="column"] { min-width: 100% !important; }
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
+_inject_app_theme(str(st.session_state.get("ui_theme", "dark")))
 _inject_mobile_sidebar()
 
 st.title("Compresso Parametric Studio")
@@ -366,6 +479,16 @@ st.caption(
 )
 
 with st.sidebar:
+    st.header("Тема")
+    st.radio(
+        "Интерфейс",
+        options=["dark", "light"],
+        format_func=lambda value: "Тёмная" if value == "dark" else "Светлая",
+        horizontal=True,
+        key="ui_theme",
+        on_change=_on_theme_change,
+    )
+
     st.header("Пресет")
     st.button(
         "Сбросить к Regular (Default)",
