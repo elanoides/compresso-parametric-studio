@@ -28,6 +28,10 @@ PROFILE_PARAM_KEYS: tuple[str, ...] = (
     "kerning_pairs",
 )
 
+# Ink is user-controlled in the UI — never overwrite when loading a style preset.
+INK_KEYS: tuple[str, ...] = ("fill", "stroke", "background")
+GEOMETRY_KEYS: tuple[str, ...] = tuple(k for k in PROFILE_PARAM_KEYS if k not in INK_KEYS)
+
 BASE_REGULAR: dict[str, Any] = {
     "rx": 30.0,
     "ry": 10.0,
@@ -108,9 +112,18 @@ def snapshot_from_session(session: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def apply_profile_to_session(session: Any, profile: dict[str, Any]) -> None:
-    """Write profile values into Streamlit session_state (or a mapping)."""
-    for key in PROFILE_PARAM_KEYS:
+def apply_profile_to_session(
+    session: Any,
+    profile: dict[str, Any],
+    *,
+    keys: tuple[str, ...] | None = None,
+) -> None:
+    """Write profile values into Streamlit session_state (or a mapping).
+
+    By default applies all ``PROFILE_PARAM_KEYS``. Pass ``keys=GEOMETRY_KEYS``
+    to leave the user's fill/stroke/background untouched.
+    """
+    for key in keys if keys is not None else PROFILE_PARAM_KEYS:
         if key not in profile:
             continue
         value = profile[key]

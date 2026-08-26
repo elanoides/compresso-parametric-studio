@@ -27,6 +27,7 @@ from engine.glyphs import (
 from engine.presets import (
     BUILTIN_NAMES,
     BUILTIN_PRESETS,
+    GEOMETRY_KEYS,
     apply_profile_to_session,
     merge_profiles,
     profiles_from_json,
@@ -136,12 +137,12 @@ def _on_preset_select() -> None:
 
 
 def _load_preset(name: str) -> None:
-    """Callback: apply a named preset to all sliders before widgets render."""
+    """Callback: apply a named preset's geometry/FX — keep user's ink colors."""
     profiles = merge_profiles(st.session_state.get("custom_presets") or {})
     profile = profiles.get(name)
     if not profile:
         return
-    apply_profile_to_session(st.session_state, profile)
+    apply_profile_to_session(st.session_state, profile, keys=GEOMETRY_KEYS)
     st.session_state["active_preset"] = name
     st.session_state["preset_selector"] = name
     st.session_state["font_style"] = name
@@ -263,9 +264,34 @@ def show_svg(
     )
 
 
+def _safe_hex_color(value: object, fallback: str) -> str:
+    """Return a #RRGGBB color; never collapse to an empty/invalid value."""
+    s = str(value or "").strip()
+    if len(s) == 7 and s[0] == "#" and all(c in "0123456789abcdefABCDEF" for c in s[1:]):
+        return "#" + s[1:].upper()
+    if len(s) == 6 and all(c in "0123456789abcdefABCDEF" for c in s):
+        return f"#{s.upper()}"
+    return fallback
+
+
+def _ensure_ink_colors() -> None:
+    """Normalize ink before color_picker widgets mount (never silent black-on-black)."""
+    fill = _safe_hex_color(st.session_state.get("fill"), THEME["fill"])
+    stroke = _safe_hex_color(st.session_state.get("stroke"), THEME["stroke"])
+    background = _safe_hex_color(st.session_state.get("background"), THEME["background"])
+    if fill.upper() == background.upper():
+        fill = THEME["fill"] if background.upper() != THEME["fill"].upper() else "#000000"
+    st.session_state["fill"] = fill
+    st.session_state["stroke"] = stroke
+    st.session_state["background"] = background
+
+
 def _current_params(*, show_guides: bool = False, show_grid: bool = False, preview_scale: float = 1.0) -> RenderParams:
     kern_raw: dict[str, float] = st.session_state.get("kerning_pairs") or {}
     kern_pairs = tuple(sorted((str(k), float(v)) for k, v in kern_raw.items() if len(str(k)) == 2))
+    fill = _safe_hex_color(st.session_state.get("fill"), THEME["fill"])
+    stroke = _safe_hex_color(st.session_state.get("stroke"), THEME["stroke"])
+    background = _safe_hex_color(st.session_state.get("background"), THEME["background"])
     return RenderParams(
         rx=float(st.session_state["rx"]),
         ry=float(st.session_state["ry"]),
@@ -276,9 +302,9 @@ def _current_params(*, show_guides: bool = False, show_grid: bool = False, previ
         letter_spacing=float(st.session_state["letter_spacing"]),
         col_scale=int(st.session_state["col_scale"]),
         row_scale=int(st.session_state["row_scale"]),
-        fill=str(st.session_state["fill"]),
-        stroke=str(st.session_state["stroke"]),
-        background=str(st.session_state["background"]),
+        fill=fill,
+        stroke=stroke,
+        background=background,
         show_guides=show_guides,
         show_grid=show_grid,
         preview_scale=preview_scale,
@@ -683,6 +709,8 @@ pending = st.session_state.pop("_pending_preset", None)
 if pending:
     _load_preset(str(pending))
 
+_ensure_ink_colors()
+
 st.title("Compresso Parametric Studio")
 
 with st.sidebar:
@@ -712,6 +740,16 @@ with st.sidebar:
         use_container_width=True,
         on_click=_reset_to_regular,
     )
+
+    st.markdown("##### Цвет")
+    st.caption("Не меняется при выборе пресета — только вручную или при сбросе.")
+    c_fill, c_stroke, c_bg = st.columns(3)
+    with c_fill:
+        st.color_picker("Fill", key="fill")
+    with c_stroke:
+        st.color_picker("Stroke", key="stroke")
+    with c_bg:
+        st.color_picker("Bg", key="background")
 
     with st.expander("Модуль", expanded=False):
         st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
@@ -749,11 +787,6 @@ with st.sidebar:
             st.caption("Seed не влияет, пока jitter = 0.")
         else:
             st.caption(f"Seed: **{int(st.session_state.get('seed', 0))}**")
-
-    with st.expander("Цвет", expanded=False):
-        st.color_picker("Fill", key="fill")
-        st.color_picker("Stroke", key="stroke")
-        st.color_picker("Background", key="background")
 
     _persist_presets_to_browser()
 
