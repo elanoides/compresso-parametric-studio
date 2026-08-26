@@ -1,7 +1,9 @@
-"""SVG geometry: oval modules, layout bounds, glyph and text rendering."""
+"""SVG geometry: oval modules, deformations, layout bounds, rendering."""
 
 from __future__ import annotations
 
+import math
+import random
 from dataclasses import dataclass, replace
 from typing import Mapping
 
@@ -42,6 +44,11 @@ class RenderParams:
     preview_scale: float = 1.0
     # Kerning: pair "АВ" → delta in grid columns (negative = tighter).
     kerning_pairs: tuple[tuple[str, float], ...] = ()
+    # Deformations & FX
+    slant_angle: float = 0.0  # degrees; + = classic italic (top to the right)
+    jitter_x: float = 0.0  # px amplitude of per-module X jitter
+    row_jitter: float = 0.0  # px amplitude of whole-row X shift
+    seed: int = 0
 
 
 def kerning_dict(p: RenderParams) -> dict[str, float]:
@@ -54,11 +61,68 @@ def stroke_margin(p: RenderParams) -> float:
     return p.stroke_width / 2.0
 
 
+def slant_tan(p: RenderParams) -> float:
+    """``tan(slant_angle)`` in radians."""
+    return math.tan(math.radians(float(p.slant_angle)))
+
+
+def deform_pad_x(p: RenderParams) -> float:
+    """Horizontal canvas padding needed for slant + jitter so ovals do not clip."""
+    # Worst-case vertical distance from baseline across the full grid.
+    max_above = BASELINE * p.step_y + p.ry
+    max_below = (ROWS_TOTAL - 1 - BASELINE) * p.step_y + p.ry
+    slant_extra = abs(slant_tan(p)) * max(max_above, max_below)
+    jitter_extra = abs(float(p.jitter_x)) + abs(float(p.row_jitter))
+    return slant_extra + jitter_extra
+
+
 def module_center(
     col: float, row: float, p: RenderParams, origin_x: float, origin_y: float
 ) -> tuple[float, float]:
-    """Map grid (col, row) to SVG pixel center."""
+    """Map grid (col, row) to SVG pixel center (before deformation)."""
     return origin_x + col * p.step_x, origin_y + row * p.step_y
+
+
+def _stable_unit(seed: int, *parts: object) -> float:
+    """Deterministic value in ``[-1, 1]`` from seed + parts."""
+    material = "|".join(str(p) for p in (int(seed), *parts))
+    rng = random.Random(material)
+    return rng.uniform(-1.0, 1.0)
+
+
+def deform_offset_x(
+    *,
+    col: float,
+    row: int,
+    cy: float,
+    y_baseline: float,
+    p: RenderParams,
+    salt: str = "",
+) -> float:
+    """Horizontal deformation: slant relative to baseline + glitch jitters."""
+    dx = (y_baseline - cy) * slant_tan(p)
+    if p.jitter_x:
+        dx += float(p.jitter_x) * _stable_unit(p.seed, "jx", salt, col, row)
+    if p.row_jitter:
+        dx += float(p.row_jitter) * _stable_unit(p.seed, "row", salt, row)
+    return dx
+
+
+def transformed_center(
+    col: float,
+    row: int,
+    p: RenderParams,
+    origin_x: float,
+    origin_y: float,
+    *,
+    min_row: int = 0,
+    salt: str = "",
+) -> tuple[float, float]:
+    """Grid → SVG center with slant / jitter applied."""
+    cx, cy = module_center(col, row - min_row, p, origin_x, origin_y)
+    y_base = origin_y + (BASELINE - min_row) * p.step_y
+    cx += deform_offset_x(col=col, row=row, cy=cy, y_baseline=y_base, p=p, salt=salt)
+    return cx, cy
 
 
 def ellipse_svg(cx: float, cy: float, p: RenderParams) -> str:
@@ -71,9 +135,10 @@ def ellipse_svg(cx: float, cy: float, p: RenderParams) -> str:
 
 
 def _layout_origin(p: RenderParams) -> tuple[float, float]:
-    """Top-left content origin including stroke margin."""
+    """Top-left content origin including stroke + deformation margin."""
     m = stroke_margin(p)
-    return p.padding + p.rx + m, p.padding + p.ry + m
+    extra = deform_pad_x(p)
+    return p.padding + p.rx + m + extra, p.padding + p.ry + m
 
 
 def _canvas_size(
@@ -85,9 +150,10 @@ def _canvas_size(
 ) -> tuple[float, float, float, float]:
     """Return width, height, origin_x, origin_y for a grid span."""
     m = stroke_margin(p)
+    extra = deform_pad_x(p)
     ox, oy = _layout_origin(p)
     row_span = max(max_row - min_row, 0)
-    width = p.padding * 2 + max(max_col, 0) * p.step_x + (p.rx + m) * 2
+    width = p.padding * 2 + max(max_col, 0) * p.step_x + (p.rx + m) * 2 + extra * 2
     height = p.padding * 2 + row_span * p.step_y + (p.ry + m) * 2
     oy_adjusted = oy - min_row * p.step_y
     return width, height, ox, oy_adjusted
@@ -199,7 +265,7 @@ def render_glyph_svg(
 
     parts.append("<g>")
     for c, r in coords:
-        cx, cy = module_center(c, r - min_row, p, ox, oy)
+        cx, cy = transformed_center(c, r, p, ox, oy, min_row=min_row, salt=ch)
         parts.append(ellipse_svg(cx, cy, p))
     parts.append("</g></svg>")
     return "\n".join(parts)
@@ -213,10 +279,10 @@ def _advance_for(ch: str, p: RenderParams) -> float:
 
 def _layout_text_modules(
     text: str, p: RenderParams
-) -> tuple[list[tuple[float, int]], float, int, int]:
+) -> tuple[list[tuple[float, int, str]], float, int, int]:
     """Place text on the grid with kerning; return modules, max column, row span."""
     kern = kerning_dict(p)
-    ellipses: list[tuple[float, int]] = []
+    ellipses: list[tuple[float, int, str]] = []
     max_col = 0.0
     min_row = ROWS_TOTAL - 1
     max_row = 0
@@ -238,7 +304,7 @@ def _layout_text_modules(
             max_col = max(max_col, abs_c)
             min_row = min(min_row, r)
             max_row = max(max_row, r)
-            ellipses.append((abs_c, r))
+            ellipses.append((abs_c, r, ch))
         cursor_col += _advance_for(ch, p)
         prev = ch
 
@@ -279,8 +345,8 @@ def render_text_svg(text: str, p: RenderParams) -> str:
             f'stroke="#ff6b4a" stroke-width="1" opacity="0.7"/>'
         )
     parts.append("<g>")
-    for c, r in ellipses:
-        cx, cy = module_center(c, r - min_row, p, ox, oy)
+    for c, r, ch in ellipses:
+        cx, cy = transformed_center(c, r, p, ox, oy, min_row=min_row, salt=ch)
         parts.append(ellipse_svg(cx, cy, p))
     parts.append("</g></svg>")
     return "\n".join(parts)
@@ -306,6 +372,37 @@ def params_cache_key(p: RenderParams) -> tuple:
         p.padding,
         p.preview_scale,
         p.kerning_pairs,
+        p.slant_angle,
+        p.jitter_x,
+        p.row_jitter,
+        p.seed,
+    )
+
+
+def params_from_cache_key(key: tuple) -> RenderParams:
+    """Rebuild ``RenderParams`` from ``params_cache_key`` output."""
+    return RenderParams(
+        rx=key[0],
+        ry=key[1],
+        stroke_width=key[2],
+        fill_opacity=key[3],
+        step_x=key[4],
+        step_y=key[5],
+        letter_spacing=key[6],
+        col_scale=key[7],
+        row_scale=key[8],
+        fill=key[9],
+        stroke=key[10],
+        background=key[11],
+        show_guides=key[12],
+        show_grid=key[13],
+        padding=key[14],
+        preview_scale=key[15],
+        kerning_pairs=key[16],
+        slant_angle=key[17] if len(key) > 17 else 0.0,
+        jitter_x=key[18] if len(key) > 18 else 0.0,
+        row_jitter=key[19] if len(key) > 19 else 0.0,
+        seed=int(key[20]) if len(key) > 20 else 0,
     )
 
 

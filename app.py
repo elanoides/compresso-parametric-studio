@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -10,13 +11,13 @@ import streamlit.components.v1 as components
 from engine.exporter import (
     DEFAULT_STYLE,
     FAMILY,
-    STYLE_NAMES,
+    build_family_zip,
     build_glyphs_json,
     build_ttf_bytes,
     normalize_style_name,
     style_slug,
 )
-from engine.geometry import RenderParams, params_cache_key, with_params
+from engine.geometry import RenderParams, params_cache_key, params_from_cache_key, with_params
 from engine.glyphs import (
     BASELINE,
     BODY_TOP,
@@ -25,10 +26,19 @@ from engine.glyphs import (
     get_glyph,
     glyph_width,
 )
+from engine.presets import (
+    BUILTIN_NAMES,
+    BUILTIN_PRESETS,
+    apply_profile_to_session,
+    merge_profiles,
+    profiles_from_json,
+    profiles_to_json,
+    snapshot_from_session,
+)
 from engine.render import render_glyph_svg, render_text_svg
 
 # ----- Regular (Default) -----
-REGULAR_VERSION = 4
+REGULAR_VERSION = 5
 REGULAR: dict[str, float | int | str] = {
     "rx": 30.0,
     "ry": 10.0,
@@ -42,6 +52,10 @@ REGULAR: dict[str, float | int | str] = {
     "fill": "#FFFFFF",
     "stroke": "#FFFFFF",
     "background": "#000000",
+    "slant_angle": 0.0,
+    "jitter_x": 0.0,
+    "row_jitter": 0.0,
+    "seed": 0,
 }
 
 DEFAULT_PHRASE = "НАДЁЖНЫЕ И РАБОТЯЩИЕ"
@@ -99,6 +113,10 @@ def _ensure_defaults() -> None:
         st.session_state.setdefault("kern_delta_in", -0.5)
         st.session_state.setdefault("word_text", DEFAULT_PHRASE)
         st.session_state.setdefault("ui_theme", "dark")
+        st.session_state.setdefault("custom_presets", {})
+        st.session_state.setdefault("active_preset", "Regular")
+        st.session_state.setdefault("preset_name_in", "")
+        st.session_state.setdefault("preset_selector", "Regular")
         return
     for key, value in REGULAR.items():
         st.session_state.setdefault(key, value)
@@ -109,6 +127,10 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("kern_delta_in", -0.5)
     st.session_state.setdefault("word_text", DEFAULT_PHRASE)
     st.session_state.setdefault("ui_theme", "dark")
+    st.session_state.setdefault("custom_presets", {})
+    st.session_state.setdefault("active_preset", "Regular")
+    st.session_state.setdefault("preset_name_in", "")
+    st.session_state.setdefault("preset_selector", "Regular")
 
 
 def _resolved_font_style() -> str:
@@ -116,9 +138,59 @@ def _resolved_font_style() -> str:
     return normalize_style_name(str(st.session_state.get("font_style", DEFAULT_STYLE)))
 
 
-def _apply_style_preset(name: str) -> None:
-    """Callback: put a preset style name into the free-text field."""
+def _all_presets() -> dict:
+    return merge_profiles(st.session_state.get("custom_presets") or {})
+
+
+def _on_preset_select() -> None:
+    _load_preset(str(st.session_state.get("preset_selector") or "Regular"))
+
+
+def _load_preset(name: str) -> None:
+    """Callback: apply a named preset to all sliders before widgets render."""
+    profiles = merge_profiles(st.session_state.get("custom_presets") or {})
+    profile = profiles.get(name)
+    if not profile:
+        return
+    apply_profile_to_session(st.session_state, profile)
+    st.session_state["active_preset"] = name
+    st.session_state["preset_selector"] = name
     st.session_state["font_style"] = name
+    st.session_state["preset_name_in"] = name if name not in BUILTIN_NAMES else ""
+
+
+def _save_current_preset() -> None:
+    """Callback: save/overwrite current settings under preset_name_in."""
+    name = str(st.session_state.get("preset_name_in") or "").strip()
+    if not name:
+        name = str(st.session_state.get("font_style") or "").strip()
+    if not name:
+        return
+    customs = dict(st.session_state.get("custom_presets") or {})
+    customs[name] = snapshot_from_session(dict(st.session_state))
+    st.session_state["custom_presets"] = customs
+    st.session_state["active_preset"] = name
+    st.session_state["preset_selector"] = name
+    st.session_state["font_style"] = name
+    st.session_state["preset_name_in"] = name
+
+
+def _delete_custom_preset() -> None:
+    """Callback: delete the selected custom preset."""
+    name = str(st.session_state.get("active_preset") or "")
+    if name in BUILTIN_NAMES:
+        return
+    customs = dict(st.session_state.get("custom_presets") or {})
+    customs.pop(name, None)
+    st.session_state["custom_presets"] = customs
+    st.session_state["active_preset"] = "Regular"
+    _load_preset("Regular")
+
+
+def _reroll_seed() -> None:
+    import random as _random
+
+    st.session_state["seed"] = _random.randint(0, 999_999)
 
 
 def _theme_palette(name: str | None = None) -> dict[str, str]:
@@ -141,13 +213,13 @@ def _on_theme_change() -> None:
 
 def _reset_to_regular() -> None:
     """Callback: write Regular values into session_state before widgets render."""
-    for key, value in REGULAR.items():
-        if key in {"fill", "stroke", "background"}:
-            continue
-        st.session_state[key] = value
+    apply_profile_to_session(st.session_state, BUILTIN_PRESETS["Regular"])
     _apply_theme_colors()
     st.session_state["_regular_version"] = REGULAR_VERSION
-    st.session_state["font_size"] = DEFAULT_FONT_SIZE
+    st.session_state["active_preset"] = "Regular"
+    st.session_state["preset_selector"] = "Regular"
+    st.session_state["font_style"] = "Regular"
+    st.session_state["preset_name_in"] = ""
 
 
 def _to_all_caps(s: str) -> str:
@@ -191,79 +263,27 @@ def _current_params(*, show_guides: bool = False, show_grid: bool = False, previ
         show_grid=show_grid,
         preview_scale=preview_scale,
         kerning_pairs=kern_pairs,
+        slant_angle=float(st.session_state.get("slant_angle", 0.0)),
+        jitter_x=float(st.session_state.get("jitter_x", 0.0)),
+        row_jitter=float(st.session_state.get("row_jitter", 0.0)),
+        seed=int(st.session_state.get("seed", 0)),
     )
 
 
 @st.cache_data(show_spinner=False)
 def _cached_glyph_svg(ch: str, key: tuple) -> str:
-    p = RenderParams(
-        rx=key[0],
-        ry=key[1],
-        stroke_width=key[2],
-        fill_opacity=key[3],
-        step_x=key[4],
-        step_y=key[5],
-        letter_spacing=key[6],
-        col_scale=key[7],
-        row_scale=key[8],
-        fill=key[9],
-        stroke=key[10],
-        background=key[11],
-        show_guides=key[12],
-        show_grid=key[13],
-        padding=key[14],
-        preview_scale=key[15],
-        kerning_pairs=key[16],
-    )
-    return render_glyph_svg(ch, p)
+    return render_glyph_svg(ch, params_from_cache_key(key))
 
 
 @st.cache_data(show_spinner=False)
 def _cached_text_svg(text: str, key: tuple) -> str:
-    p = RenderParams(
-        rx=key[0],
-        ry=key[1],
-        stroke_width=key[2],
-        fill_opacity=key[3],
-        step_x=key[4],
-        step_y=key[5],
-        letter_spacing=key[6],
-        col_scale=key[7],
-        row_scale=key[8],
-        fill=key[9],
-        stroke=key[10],
-        background=key[11],
-        show_guides=key[12],
-        show_grid=key[13],
-        padding=key[14],
-        preview_scale=key[15],
-        kerning_pairs=key[16],
-    )
-    return render_text_svg(text, p)
+    return render_text_svg(text, params_from_cache_key(key))
 
 
 @st.cache_data(show_spinner="Сборка TTF…")
 def _cached_ttf_bytes(key: tuple, style: str) -> bytes:
     """Build TTF from a cache key + style name (always matches current export)."""
-    p = RenderParams(
-        rx=key[0],
-        ry=key[1],
-        stroke_width=key[2],
-        fill_opacity=key[3],
-        step_x=key[4],
-        step_y=key[5],
-        letter_spacing=key[6],
-        col_scale=key[7],
-        row_scale=key[8],
-        fill=key[9],
-        stroke=key[10],
-        background=key[11],
-        show_guides=False,
-        show_grid=False,
-        padding=key[14],
-        preview_scale=1.0,
-        kerning_pairs=key[16],
-    )
+    p = with_params(params_from_cache_key(key), show_guides=False, show_grid=False, preview_scale=1.0)
     return build_ttf_bytes(p, family=FAMILY, style=style)
 
 
@@ -558,31 +578,82 @@ with st.sidebar:
         on_change=_on_theme_change,
     )
 
-    st.header("Пресет")
+    st.header("Семейство / пресеты")
+    pending = st.session_state.pop("_pending_preset", None)
+    if pending:
+        _load_preset(str(pending))
+
+    all_profiles = _all_presets()
+    preset_names = list(all_profiles.keys())
+    if st.session_state.get("preset_selector") not in preset_names:
+        st.session_state["preset_selector"] = "Regular"
+        st.session_state["active_preset"] = "Regular"
+
+    st.selectbox(
+        "Активное начертание",
+        options=preset_names,
+        key="preset_selector",
+        on_change=_on_preset_select,
+    )
+
     st.button(
         "Сбросить к Regular (Default)",
         use_container_width=True,
         on_click=_reset_to_regular,
     )
 
-    st.header("Начертание")
     st.text_input(
-        "Название начертания (попадёт в TTF/JSON как есть)",
-        key="font_style",
-        placeholder="Например Expanded или Display",
-        help="Именно этот текст запишется в метаданные шрифта.",
+        "Имя начертания",
+        key="preset_name_in",
+        placeholder="My Ultra Slant",
+        help="Имя для сохранения в семейство и метаданные TTF.",
     )
-    st.caption("Быстрый выбор:")
-    preset_cols = st.columns(2)
-    for i, name in enumerate(STYLE_NAMES):
-        preset_cols[i % 2].button(
-            name,
-            key=f"style_preset_{name}",
+    c_save, c_del = st.columns(2)
+    with c_save:
+        st.button(
+            "Сохранить текущее",
             use_container_width=True,
-            on_click=_apply_style_preset,
-            args=(name,),
+            on_click=_save_current_preset,
         )
-    st.caption(f"В экспорт: **{_resolved_font_style()}**")
+    with c_del:
+        st.button(
+            "Удалить своё",
+            use_container_width=True,
+            on_click=_delete_custom_preset,
+            disabled=str(st.session_state.get("active_preset")) in BUILTIN_NAMES,
+        )
+
+    st.text_input(
+        "Название в TTF/JSON",
+        key="font_style",
+        placeholder="Expanded",
+        help="Текст, который попадёт в name table шрифта.",
+    )
+    st.caption(
+        f"В экспорт: **{_resolved_font_style()}** · пресет: **{st.session_state.get('active_preset')}**"
+    )
+
+    st.download_button(
+        "Скачать профили (JSON)",
+        data=profiles_to_json(
+            st.session_state.get("custom_presets") or {},
+            active=str(st.session_state.get("active_preset")),
+        ),
+        file_name="compresso_presets.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    uploaded = st.file_uploader("Загрузить JSON профилей", type=["json"], key="presets_upload")
+    if uploaded is not None and st.session_state.get("_presets_upload_name") != uploaded.name:
+        try:
+            customs, active_loaded = profiles_from_json(uploaded.getvalue())
+            st.session_state["custom_presets"] = customs
+            st.session_state["_presets_upload_name"] = uploaded.name
+            if active_loaded and active_loaded in merge_profiles(customs):
+                st.session_state["_pending_preset"] = active_loaded
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"JSON: {exc}")
 
     st.header("Module")
     st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
@@ -596,6 +667,13 @@ with st.sidebar:
     st.slider("Matrix columns ×", 1, 3, step=1, key="col_scale")
     st.slider("Matrix rows ×", 1, 3, step=1, key="row_scale")
     st.slider("Letter spacing (cols)", 0.0, 6.0, step=0.5, key="letter_spacing")
+
+    st.header("Deformations & FX")
+    st.slider("Slant / Skew Angle (°)", -30.0, 30.0, step=0.5, key="slant_angle")
+    st.slider("Glitch Intensity (X Jitter)", 0.0, 50.0, step=0.5, key="jitter_x")
+    st.slider("Row Jitter (Scanline Shift)", 0.0, 50.0, step=0.5, key="row_jitter")
+    st.slider("Random Seed", 0, 999_999, step=1, key="seed")
+    st.button("Reroll Seed", use_container_width=True, on_click=_reroll_seed)
 
     st.header("Look")
     st.color_picker("Fill", key="fill")
@@ -826,3 +904,40 @@ with tab_words:
             )
         except Exception as exc:  # noqa: BLE001 — surface in UI
             st.error(f"TTF: {exc}")
+
+    st.divider()
+    st.subheader("Экспорт шрифтового семейства (Batch Export)")
+    st.caption(
+        "В архив войдут все built-in пресеты + ваши сохранённые начертания: "
+        "SVG алфавит, specimen, JSON и TTF на каждое."
+    )
+    family_styles = _all_presets()
+    live_name = _resolved_font_style()
+    if live_name not in family_styles:
+        family_styles = dict(family_styles)
+        family_styles[live_name] = snapshot_from_session(dict(st.session_state))
+
+    st.write(f"Начертаний в пакете: **{len(family_styles)}** — " + ", ".join(family_styles.keys()))
+    if st.button("Собрать ZIP семейства", use_container_width=True):
+        try:
+            with st.spinner("Сборка ZIP…"):
+                st.session_state["family_zip_bytes"] = build_family_zip(
+                    family_styles,
+                    family=FAMILY,
+                    specimen=text or DEFAULT_PHRASE,
+                )
+                st.session_state["family_zip_ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            st.session_state["family_zip_ok"] = False
+            st.error(f"ZIP: {exc}")
+
+    zip_bytes = st.session_state.get("family_zip_bytes")
+    if zip_bytes and st.session_state.get("family_zip_ok"):
+        st.download_button(
+            "Скачать CRT_Font_Family_Pack.zip",
+            data=zip_bytes,
+            file_name="CRT_Font_Family_Pack.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key=f"dl_family_zip_{len(zip_bytes)}",
+        )

@@ -9,7 +9,7 @@ from io import BytesIO
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 
-from engine.geometry import RenderParams
+from engine.geometry import RenderParams, deform_offset_x, render_glyph_svg, render_text_svg, slant_tan
 from engine.glyphs import (
     BASELINE,
     BODY_TOP,
@@ -19,6 +19,7 @@ from engine.glyphs import (
     get_glyph,
     glyph_width,
 )
+from engine.presets import safe_folder_name
 
 ELLIPSE_SEGMENTS = 28
 FAMILY = "Compresso Parametric"
@@ -241,17 +242,49 @@ def _glyph_metrics(
     coords = get_glyph(ch, p.col_scale, p.row_scale)
     if not coords:
         return max(advance, 1), 0, 0, advance, 0
-    min_c = min(c for c, _ in coords)
-    max_c = max(c for c, _ in coords)
-    min_r = min(r for _, r in coords)
-    max_r = max(r for _, r in coords)
+
     rx = p.rx * scale
     ry = p.ry * scale
-    xmin = int(math.floor(min_c * p.step_x * scale - rx))
-    xmax = int(math.ceil(max_c * p.step_x * scale + rx))
-    ymax = int(math.ceil((BASELINE - min_r) * p.step_y * scale + ry))
-    ymin = int(math.floor((BASELINE - max_r) * p.step_y * scale - ry))
-    return max(advance, 1), xmin, ymin, xmax, ymax
+    xs: list[float] = []
+    ys: list[float] = []
+    for c, r in coords:
+        cx, cy = _transformed_font_xy(c, r, p, scale, salt=ch)
+        xs.extend((cx - rx, cx + rx))
+        ys.extend((cy - ry, cy + ry))
+
+    xmin = int(math.floor(min(xs)))
+    xmax = int(math.ceil(max(xs)))
+    ymin = int(math.floor(min(ys)))
+    ymax = int(math.ceil(max(ys)))
+    advance = max(advance, xmax + int(math.ceil(rx)), 1)
+    return advance, xmin, ymin, xmax, ymax
+
+
+def _transformed_font_xy(
+    c: int, r: int, p: RenderParams, scale: float, *, salt: str
+) -> tuple[float, float]:
+    """Module center in font units (y up from baseline) with deformations."""
+    cx = c * p.step_x * scale
+    cy = (BASELINE - r) * p.step_y * scale
+    dx = cy * slant_tan(p)
+    jitter_only = RenderParams(
+        slant_angle=0.0,
+        jitter_x=p.jitter_x,
+        row_jitter=p.row_jitter,
+        seed=p.seed,
+    )
+    dx += (
+        deform_offset_x(
+            col=float(c),
+            row=int(r),
+            cy=0.0,
+            y_baseline=0.0,
+            p=jitter_only,
+            salt=salt,
+        )
+        * scale
+    )
+    return cx + dx, cy
 
 
 def build_ttf_bytes(
@@ -303,8 +336,7 @@ def build_ttf_bytes(
         rx = p.rx * scale
         ry = p.ry * scale
         for c, r in coords:
-            cx = c * p.step_x * scale
-            cy = (BASELINE - r) * p.step_y * scale
+            cx, cy = _transformed_font_xy(c, r, p, scale, salt=ch)
             _draw_ellipse(pen, cx, cy, rx, ry)
         glyphs[gname] = pen.glyph()
         advance, xmin, ymin, xmax, ymax = _glyph_metrics(ch, p, scale)
@@ -398,6 +430,10 @@ def build_glyphs_json(
             "letter_spacing": p.letter_spacing,
             "col_scale": p.col_scale,
             "row_scale": p.row_scale,
+            "slant_angle": p.slant_angle,
+            "jitter_x": p.jitter_x,
+            "row_jitter": p.row_jitter,
+            "seed": p.seed,
         },
         "kerning": {pair: delta for pair, delta in p.kerning_pairs},
         "glyphs": {
@@ -406,3 +442,71 @@ def build_glyphs_json(
         },
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def profile_to_render_params(profile: dict, *, preview_scale: float = 1.0) -> RenderParams:
+    """Build ``RenderParams`` from a preset profile dict."""
+    kern_raw = profile.get("kerning_pairs") or {}
+    kern_pairs = tuple(
+        sorted((str(k), float(v)) for k, v in dict(kern_raw).items() if len(str(k)) == 2)
+    )
+    return RenderParams(
+        rx=float(profile.get("rx", 30.0)),
+        ry=float(profile.get("ry", 10.0)),
+        stroke_width=float(profile.get("stroke_width", 0.0)),
+        fill_opacity=float(profile.get("fill_opacity", 1.0)),
+        step_x=float(profile.get("step_x", 38.5)),
+        step_y=float(profile.get("step_y", 16.0)),
+        letter_spacing=float(profile.get("letter_spacing", 1.0)),
+        col_scale=int(profile.get("col_scale", 1)),
+        row_scale=int(profile.get("row_scale", 1)),
+        fill=str(profile.get("fill", "#FFFFFF")),
+        stroke=str(profile.get("stroke", "#FFFFFF")),
+        background=str(profile.get("background", "#000000")),
+        show_guides=False,
+        show_grid=False,
+        preview_scale=preview_scale,
+        kerning_pairs=kern_pairs,
+        slant_angle=float(profile.get("slant_angle", 0.0)),
+        jitter_x=float(profile.get("jitter_x", 0.0)),
+        row_jitter=float(profile.get("row_jitter", 0.0)),
+        seed=int(profile.get("seed", 0)),
+    )
+
+
+def build_family_zip(
+    styles: dict[str, dict],
+    *,
+    family: str = FAMILY,
+    specimen: str = "НАДЁЖНЫЕ И РАБОТЯЩИЕ",
+) -> bytes:
+    """Pack every style into a ZIP: SVG alphabet, specimen, JSON, TTF."""
+    import zipfile
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for style_name, profile in styles.items():
+            folder = safe_folder_name(style_name)
+            params = profile_to_render_params(profile)
+            # Alphabet SVGs
+            for ch in GLYPH_CHARS:
+                if ch == " ":
+                    continue
+                svg = render_glyph_svg(ch, params)
+                fname = f"u{ord(ch):04X}" if not ch.isascii() or not ch.isalnum() else ch
+                zf.writestr(f"{folder}/svg/{fname}.svg", svg.encode("utf-8"))
+            # Specimen
+            spec_svg = render_text_svg(specimen, params)
+            zf.writestr(f"{folder}/specimen.svg", spec_svg.encode("utf-8"))
+            # JSON config
+            zf.writestr(
+                f"{folder}/{folder}.json",
+                build_glyphs_json(params, family=family, style=style_name).encode("utf-8"),
+            )
+            # TTF
+            try:
+                ttf = build_ttf_bytes(params, family=family, style=style_name)
+                zf.writestr(f"{folder}/{folder}.ttf", ttf)
+            except Exception as exc:  # noqa: BLE001
+                zf.writestr(f"{folder}/TTF_ERROR.txt", f"{type(exc).__name__}: {exc}\n")
+    return buf.getvalue()
