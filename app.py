@@ -741,15 +741,11 @@ with st.sidebar:
         on_click=_reset_to_regular,
     )
 
-    st.markdown("##### Цвет")
-    st.caption("Не меняется при выборе пресета — только вручную или при сбросе.")
-    c_fill, c_stroke, c_bg = st.columns(3)
-    with c_fill:
+    with st.expander("Цвет", expanded=False):
+        st.caption("Не меняется при выборе пресета — только вручную или при сбросе.")
         st.color_picker("Fill", key="fill")
-    with c_stroke:
         st.color_picker("Stroke", key="stroke")
-    with c_bg:
-        st.color_picker("Bg", key="background")
+        st.color_picker("Background", key="background")
 
     with st.expander("Модуль", expanded=False):
         st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
