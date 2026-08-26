@@ -478,7 +478,7 @@ def build_family_zip(
     styles: dict[str, dict],
     *,
     family: str = FAMILY,
-    specimen: str = "НАДЁЖНЫЕ И РАБОТЯЩИЕ",
+    specimen: str = "НОБЕЛЬФАЙК",
 ) -> bytes:
     """Pack every style into a ZIP: SVG alphabet, specimen, TTF."""
     import zipfile

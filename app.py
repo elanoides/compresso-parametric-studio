@@ -35,7 +35,7 @@ from engine.presets import (
 from engine.render import render_glyph_svg, render_text_svg
 
 # ----- Regular (Default) -----
-REGULAR_VERSION = 7
+REGULAR_VERSION = 8
 REGULAR: dict[str, float | int | str] = {
     "rx": 30.0,
     "ry": 10.0,
@@ -55,7 +55,7 @@ REGULAR: dict[str, float | int | str] = {
     "seed": 0,
 }
 
-DEFAULT_PHRASE = "НАДЁЖНЫЕ И РАБОТЯЩИЕ"
+DEFAULT_PHRASE = "НОБЕЛЬФАЙК"
 DEFAULT_FONT_SIZE = 0.38  # preview_scale for word composer
 
 THEME: dict[str, str] = {
@@ -218,10 +218,22 @@ def _on_word_text_change() -> None:
     st.session_state["word_text"] = _to_all_caps(st.session_state.get("word_text", ""))
 
 
-def show_svg(svg: str, *, height: int = 480) -> None:
-    """Embed SVG via base64 data URL (markdown strips raw SVG)."""
+def show_svg(svg: str, *, height: int = 480, scale: float = 1.0) -> None:
+    """Embed SVG as <img>; scale is CSS-only so colors/geometry stay stable."""
     payload = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    st.iframe(f"data:image/svg+xml;base64,{payload}", height=height)
+    width_pct = max(5.0, min(float(scale), 1.0) * 100.0)
+    components.html(
+        f"""
+        <div style="width:100%;height:{int(height)}px;overflow:auto;background:#000;
+                    display:flex;align-items:center;justify-content:flex-start;
+                    border:1px solid #2A2A2A;border-radius:0.4rem;box-sizing:border-box;">
+          <img src="data:image/svg+xml;base64,{payload}"
+               alt="preview"
+               style="width:{width_pct:.2f}%;height:auto;display:block;flex-shrink:0;" />
+        </div>
+        """,
+        height=int(height) + 12,
+    )
 
 
 def _current_params(*, show_guides: bool = False, show_grid: bool = False, preview_scale: float = 1.0) -> RenderParams:
@@ -616,7 +628,6 @@ if pending:
     _load_preset(str(pending))
 
 st.title("Compresso Parametric Studio")
-st.caption("Параметрический All-Caps шрифт · белый на чёрном · превью → SVG / TTF")
 
 with st.sidebar:
     st.markdown("### Текущее начертание")
@@ -837,11 +848,12 @@ with tab_words:
     live_tuple = tuple(sorted((k, float(v)) for k, v in live_kern_for_word.items()))
     params_live = with_params(params, kerning_pairs=live_tuple)
     font_size = float(st.session_state["font_size"])
+    # Geometry always at full size; visual scale is CSS-only (avoids color/iframe breakage).
     word_params = with_params(
         params_live,
         show_guides=show_base,
         show_grid=False,
-        preview_scale=font_size,
+        preview_scale=1.0,
     )
     export_params = with_params(
         params_live,
@@ -861,9 +873,9 @@ with tab_words:
             + 60
         )
         * font_size
-        + 40
+        + 48
     )
-    show_svg(text_svg_preview, height=min(max(embed_h, 160), 640))
+    show_svg(text_svg_preview, height=min(max(embed_h, 160), 640), scale=font_size)
 
     kern_count = len(export_params.kerning_pairs)
     col_svg, col_ttf = st.columns(2)
