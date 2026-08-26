@@ -480,7 +480,7 @@ def build_family_zip(
     family: str = FAMILY,
     specimen: str = "НАДЁЖНЫЕ И РАБОТЯЩИЕ",
 ) -> bytes:
-    """Pack every style into a ZIP: SVG alphabet, specimen, JSON, TTF."""
+    """Pack every style into a ZIP: SVG alphabet, specimen, TTF."""
     import zipfile
 
     buf = BytesIO()
@@ -498,11 +498,6 @@ def build_family_zip(
             # Specimen
             spec_svg = render_text_svg(specimen, params)
             zf.writestr(f"{folder}/specimen.svg", spec_svg.encode("utf-8"))
-            # JSON config
-            zf.writestr(
-                f"{folder}/{folder}.json",
-                build_glyphs_json(params, family=family, style=style_name).encode("utf-8"),
-            )
             # TTF
             try:
                 ttf = build_ttf_bytes(params, family=family, style=style_name)

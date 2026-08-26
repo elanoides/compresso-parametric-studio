@@ -13,7 +13,6 @@ from engine.exporter import (
     DEFAULT_STYLE,
     FAMILY,
     build_family_zip,
-    build_glyphs_json,
     build_ttf_bytes,
     normalize_style_name,
     style_slug,
@@ -21,8 +20,6 @@ from engine.exporter import (
 from engine.geometry import RenderParams, params_cache_key, params_from_cache_key, with_params
 from engine.glyphs import (
     BASELINE,
-    BODY_TOP,
-    CAP_HEIGHT,
     ROWS_TOTAL,
     get_glyph,
     glyph_width,
@@ -33,13 +30,12 @@ from engine.presets import (
     apply_profile_to_session,
     merge_profiles,
     profiles_from_json,
-    profiles_to_json,
     snapshot_from_session,
 )
 from engine.render import render_glyph_svg, render_text_svg
 
 # ----- Regular (Default) -----
-REGULAR_VERSION = 5
+REGULAR_VERSION = 7
 REGULAR: dict[str, float | int | str] = {
     "rx": 30.0,
     "ry": 10.0,
@@ -62,42 +58,26 @@ REGULAR: dict[str, float | int | str] = {
 DEFAULT_PHRASE = "НАДЁЖНЫЕ И РАБОТЯЩИЕ"
 DEFAULT_FONT_SIZE = 0.38  # preview_scale for word composer
 
-THEMES: dict[str, dict[str, str]] = {
-    "dark": {
-        "app_bg": "#000000",
-        "sidebar_bg": "#101010",
-        "secondary_bg": "#101010",
-        "text": "#FFFFFF",
-        "muted": "#AAAAAA",
-        "border": "#333333",
-        "fill": "#FFFFFF",
-        "stroke": "#FFFFFF",
-        "background": "#000000",
-        "mobile_btn_bg": "#101010",
-        "mobile_btn_fg": "#FFFFFF",
-        "mobile_btn_border": "#333333",
-    },
-    "light": {
-        "app_bg": "#FFFFFF",
-        "sidebar_bg": "#F5F5F5",
-        "secondary_bg": "#F0F0F0",
-        "text": "#111111",
-        "muted": "#555555",
-        "border": "#DDDDDD",
-        "fill": "#000000",
-        "stroke": "#000000",
-        "background": "#FFFFFF",
-        "mobile_btn_bg": "#FFFFFF",
-        "mobile_btn_fg": "#111111",
-        "mobile_btn_border": "#DDDDDD",
-    },
+THEME: dict[str, str] = {
+    "app_bg": "#000000",
+    "sidebar_bg": "#0C0C0C",
+    "secondary_bg": "#161616",
+    "text": "#FFFFFF",
+    "muted": "#9A9A9A",
+    "border": "#2A2A2A",
+    "fill": "#FFFFFF",
+    "stroke": "#FFFFFF",
+    "background": "#000000",
+    "mobile_btn_bg": "#141414",
+    "mobile_btn_fg": "#FFFFFF",
+    "mobile_btn_border": "#333333",
 }
 
 st.set_page_config(
     page_title="Compresso Parametric Studio",
     page_icon="▣",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -112,12 +92,15 @@ def _ensure_defaults() -> None:
         st.session_state.setdefault("kerning_pairs", {})
         st.session_state.setdefault("kern_pair_in", "АВ")
         st.session_state.setdefault("kern_delta_in", -0.5)
-        st.session_state.setdefault("word_text", DEFAULT_PHRASE)
-        st.session_state.setdefault("ui_theme", "dark")
+        st.session_state["word_text"] = DEFAULT_PHRASE
         st.session_state.setdefault("custom_presets", {})
         st.session_state.setdefault("active_preset", "Regular")
         st.session_state.setdefault("preset_name_in", "")
         st.session_state.setdefault("preset_selector", "Regular")
+        # Always white-on-black after migration
+        st.session_state["fill"] = "#FFFFFF"
+        st.session_state["stroke"] = "#FFFFFF"
+        st.session_state["background"] = "#000000"
         return
     for key, value in REGULAR.items():
         st.session_state.setdefault(key, value)
@@ -127,7 +110,6 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("kern_pair_in", "АВ")
     st.session_state.setdefault("kern_delta_in", -0.5)
     st.session_state.setdefault("word_text", DEFAULT_PHRASE)
-    st.session_state.setdefault("ui_theme", "dark")
     st.session_state.setdefault("custom_presets", {})
     st.session_state.setdefault("active_preset", "Regular")
     st.session_state.setdefault("preset_name_in", "")
@@ -198,28 +180,22 @@ def _reroll_seed() -> None:
     _cached_ttf_bytes.clear()
 
 
-def _theme_palette(name: str | None = None) -> dict[str, str]:
-    """Return UI + preview colors for the active theme."""
-    key = name or str(st.session_state.get("ui_theme", "dark"))
-    return THEMES.get(key, THEMES["dark"])
+def _theme_palette() -> dict[str, str]:
+    """Dark studio palette (only theme)."""
+    return THEME
 
 
-def _apply_theme_colors(theme: str | None = None) -> None:
-    """Sync glyph preview colors with the selected UI theme."""
-    palette = _theme_palette(theme)
-    st.session_state["fill"] = palette["fill"]
-    st.session_state["stroke"] = palette["stroke"]
-    st.session_state["background"] = palette["background"]
-
-
-def _on_theme_change() -> None:
-    _apply_theme_colors(str(st.session_state.get("ui_theme", "dark")))
+def _apply_ink_defaults() -> None:
+    """Force white glyphs on black background."""
+    st.session_state["fill"] = THEME["fill"]
+    st.session_state["stroke"] = THEME["stroke"]
+    st.session_state["background"] = THEME["background"]
 
 
 def _reset_to_regular() -> None:
     """Callback: write Regular values into session_state before widgets render."""
     apply_profile_to_session(st.session_state, BUILTIN_PRESETS["Regular"])
-    _apply_theme_colors()
+    _apply_ink_defaults()
     st.session_state["_regular_version"] = REGULAR_VERSION
     st.session_state["active_preset"] = "Regular"
     st.session_state["preset_selector"] = "Regular"
@@ -322,9 +298,9 @@ def _save_draft_kern_pair() -> None:
     st.session_state["kerning_pairs"] = pairs
 
 
-def _inject_app_theme(theme: str) -> None:
-    """Inject Streamlit UI colors for dark/light mode."""
-    t = _theme_palette(theme)
+def _inject_app_theme() -> None:
+    """Inject dark Streamlit UI colors."""
+    t = _theme_palette()
     st.markdown(
         f"""
         <style>
@@ -343,25 +319,39 @@ def _inject_app_theme(theme: str) -> None:
             background-color: var(--cps-app-bg) !important;
             color: var(--cps-text) !important;
           }}
-          .block-container {{ padding-top: 1.2rem; padding-bottom: 2rem; }}
-          h1, h2, h3, h4, h5, h6, p, label, span, div {{
-            color: inherit;
+          .block-container {{
+            padding-top: 1.4rem;
+            padding-bottom: 2.5rem;
+            max-width: 1200px;
           }}
-          h1 {{ letter-spacing: 0.04em; color: var(--cps-text) !important; }}
-          section[data-testid="stSidebar"] {{
-            background: var(--cps-sidebar-bg) !important;
-            border-right: 1px solid var(--cps-border);
-          }}
-          section[data-testid="stSidebar"] * {{
-            color: var(--cps-text);
+          h1 {{
+            letter-spacing: 0.06em;
+            font-size: 1.75rem !important;
+            font-weight: 600 !important;
+            color: var(--cps-text) !important;
+            margin-bottom: 0.15rem !important;
           }}
           [data-testid="stCaptionContainer"], .stCaption {{
             color: var(--cps-muted) !important;
           }}
+          section[data-testid="stSidebar"] {{
+            background: var(--cps-sidebar-bg) !important;
+            border-right: 1px solid var(--cps-border);
+          }}
+          section[data-testid="stSidebar"] .block-container {{
+            padding-top: 1.5rem;
+          }}
+          [data-baseweb="tab-list"] {{
+            gap: 0.25rem;
+            border-bottom: 1px solid var(--cps-border);
+            margin-bottom: 1rem;
+          }}
           [data-baseweb="tab"] {{
-            color: var(--cps-text) !important;
+            color: var(--cps-muted) !important;
+            padding: 0.65rem 1rem !important;
           }}
           [data-baseweb="tab"][aria-selected="true"] {{
+            color: var(--cps-text) !important;
             border-bottom-color: var(--cps-text) !important;
           }}
           div[data-baseweb="input"] > div,
@@ -377,25 +367,27 @@ def _inject_app_theme(theme: str) -> None:
             border: 1px solid var(--cps-border);
             border-radius: 0.5rem;
           }}
+          [data-testid="stExpander"] summary {{
+            font-weight: 600;
+          }}
           [data-testid="stCode"] pre {{
             background-color: var(--cps-secondary-bg) !important;
             color: var(--cps-text) !important;
           }}
           iframe {{
             border: 1px solid var(--cps-border) !important;
-            border-radius: 0.35rem;
+            border-radius: 0.4rem;
+            background: #000 !important;
           }}
           section[data-testid="stSidebar"] div[data-testid="stButton"] button {{
             white-space: nowrap !important;
-            font-size: 0.78rem !important;
-            line-height: 1.2 !important;
-            padding-left: 0.4rem !important;
-            padding-right: 0.4rem !important;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            font-size: 0.85rem !important;
+          }}
+          div[data-testid="stVerticalBlockBorderWrapper"] {{
+            background: transparent;
           }}
           @media (max-width: 768px) {{
-            h1 {{ font-size: 1.35rem; margin-bottom: 0.25rem; }}
+            h1 {{ font-size: 1.35rem !important; }}
             [data-testid="column"] {{ min-width: 100% !important; }}
           }}
         </style>
@@ -616,150 +608,81 @@ def _persist_presets_to_browser() -> None:
 _ensure_defaults()
 _hydrate_presets_from_browser()
 
-_inject_app_theme(str(st.session_state.get("ui_theme", "dark")))
+_inject_app_theme()
 _inject_mobile_sidebar()
 
+pending = st.session_state.pop("_pending_preset", None)
+if pending:
+    _load_preset(str(pending))
+
 st.title("Compresso Parametric Studio")
-st.caption(
-    f"All-Caps modular oval type · grid {ROWS_TOTAL} rows · "
-    f"Cap-Height {BODY_TOP}–{BASELINE} ({CAP_HEIGHT}) · Baseline = row {BASELINE}"
-)
+st.caption("Параметрический All-Caps шрифт · белый на чёрном · превью → SVG / TTF")
 
 with st.sidebar:
-    st.header("Тема")
-    st.radio(
-        "Интерфейс",
-        options=["dark", "light"],
-        format_func=lambda value: "Тёмная" if value == "dark" else "Светлая",
-        horizontal=True,
-        key="ui_theme",
-        on_change=_on_theme_change,
+    st.markdown("### Текущее начертание")
+    st.text_input(
+        "Имя для TTF",
+        key="font_style",
+        placeholder="Regular",
+        help="Попадёт в name table экспортируемого шрифта.",
     )
-
-    st.header("Семейство / пресеты")
-    pending = st.session_state.pop("_pending_preset", None)
-    if pending:
-        _load_preset(str(pending))
-
-    all_profiles = _all_presets()
-    preset_names = list(all_profiles.keys())
-    if st.session_state.get("preset_selector") not in preset_names:
-        st.session_state["preset_selector"] = "Regular"
-        st.session_state["active_preset"] = "Regular"
-
-    st.selectbox(
-        "Активное начертание",
-        options=preset_names,
-        key="preset_selector",
-        on_change=_on_preset_select,
-    )
-
+    st.caption(f"Сейчас: **{_resolved_font_style()}**")
     st.button(
-        "Сбросить к Regular (Default)",
+        "Сбросить к Regular",
         use_container_width=True,
         on_click=_reset_to_regular,
     )
 
-    st.text_input(
-        "Имя начертания",
-        key="preset_name_in",
-        placeholder="My Ultra Slant",
-        help="Имя для сохранения в семейство и метаданные TTF.",
-    )
-    c_save, c_del = st.columns(2)
-    with c_save:
-        st.button(
-            "Сохранить текущее",
-            use_container_width=True,
-            on_click=_save_current_preset,
-        )
-    with c_del:
-        st.button(
-            "Удалить своё",
-            use_container_width=True,
-            on_click=_delete_custom_preset,
-            disabled=str(st.session_state.get("active_preset")) in BUILTIN_NAMES,
-        )
+    with st.expander("Модуль", expanded=False):
+        st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
+        st.slider("Radius Y (ry)", 0.5, 40.0, step=0.5, key="ry")
+        st.slider("Stroke width", 0.0, 6.0, step=0.1, key="stroke_width")
+        st.slider("Fill opacity", 0.0, 1.0, step=0.05, key="fill_opacity")
 
-    st.text_input(
-        "Название в TTF/JSON",
-        key="font_style",
-        placeholder="Expanded",
-        help="Текст, который попадёт в name table шрифта.",
-    )
-    st.caption(
-        f"В экспорт: **{_resolved_font_style()}** · пресет: **{st.session_state.get('active_preset')}**"
-    )
-    st.caption("Свои пресеты автоматически сохраняются в этом браузере (localStorage).")
+    with st.expander("Интервалы и плотность", expanded=False):
+        st.slider("Grid step X", 2.0, 60.0, step=0.5, key="step_x")
+        st.slider("Grid step Y (overlap OK)", 1.0, 40.0, step=0.5, key="step_y")
+        st.slider("Matrix columns ×", 1, 3, step=1, key="col_scale")
+        st.slider("Matrix rows ×", 1, 3, step=1, key="row_scale")
+        st.slider("Letter spacing (cols)", 0.0, 6.0, step=0.5, key="letter_spacing")
 
-    st.download_button(
-        "Скачать профили (JSON)",
-        data=profiles_to_json(
-            st.session_state.get("custom_presets") or {},
-            active=str(st.session_state.get("active_preset")),
-        ),
-        file_name="compresso_presets.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-    uploaded = st.file_uploader("Загрузить JSON профилей", type=["json"], key="presets_upload")
-    if uploaded is not None and st.session_state.get("_presets_upload_name") != uploaded.name:
-        try:
-            customs, active_loaded = profiles_from_json(uploaded.getvalue())
-            st.session_state["custom_presets"] = customs
-            st.session_state["_presets_upload_name"] = uploaded.name
-            if active_loaded and active_loaded in merge_profiles(customs):
-                st.session_state["_pending_preset"] = active_loaded
-            st.rerun()
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"JSON: {exc}")
+    with st.expander("Деформации и FX", expanded=False):
+        st.slider("Slant / Skew (°)", -30.0, 30.0, step=0.5, key="slant_angle")
+        st.slider("Glitch (X Jitter)", 0.0, 50.0, step=0.5, key="jitter_x")
+        st.slider("Row Jitter", 0.0, 50.0, step=0.5, key="row_jitter")
+        seed_col, roll_col = st.columns([2, 1])
+        with seed_col:
+            st.number_input(
+                "Seed",
+                min_value=0,
+                max_value=999_999,
+                step=1,
+                key="seed",
+                help="Паттерн глитча. Работает только если X Jitter или Row Jitter > 0.",
+            )
+        with roll_col:
+            st.write("")
+            st.button("Reroll", use_container_width=True, on_click=_reroll_seed)
+        if float(st.session_state.get("jitter_x", 0)) == 0 and float(
+            st.session_state.get("row_jitter", 0)
+        ) == 0:
+            st.caption("Seed не влияет, пока jitter = 0.")
+        else:
+            st.caption(f"Seed: **{int(st.session_state.get('seed', 0))}**")
 
-    st.header("Module")
-    st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
-    st.slider("Radius Y (ry)", 0.5, 40.0, step=0.5, key="ry")
-    st.slider("Stroke width", 0.0, 6.0, step=0.1, key="stroke_width")
-    st.slider("Fill opacity", 0.0, 1.0, step=0.05, key="fill_opacity")
-
-    st.header("Spacing & density")
-    st.slider("Grid step X", 2.0, 60.0, step=0.5, key="step_x")
-    st.slider("Grid step Y (overlap OK)", 1.0, 40.0, step=0.5, key="step_y")
-    st.slider("Matrix columns ×", 1, 3, step=1, key="col_scale")
-    st.slider("Matrix rows ×", 1, 3, step=1, key="row_scale")
-    st.slider("Letter spacing (cols)", 0.0, 6.0, step=0.5, key="letter_spacing")
-
-    st.header("Deformations & FX")
-    st.slider("Slant / Skew Angle (°)", -30.0, 30.0, step=0.5, key="slant_angle")
-    st.slider("Glitch Intensity (X Jitter)", 0.0, 50.0, step=0.5, key="jitter_x")
-    st.slider("Row Jitter (Scanline Shift)", 0.0, 50.0, step=0.5, key="row_jitter")
-    seed_col, roll_col = st.columns([2, 1])
-    with seed_col:
-        st.number_input(
-            "Random Seed",
-            min_value=0,
-            max_value=999_999,
-            step=1,
-            key="seed",
-            help="Меняет паттерн глитча. Работает только если X Jitter или Row Jitter > 0.",
-        )
-    with roll_col:
-        st.write("")  # align with number_input label
-        st.button("Reroll Seed", use_container_width=True, on_click=_reroll_seed)
-    if float(st.session_state.get("jitter_x", 0)) == 0 and float(st.session_state.get("row_jitter", 0)) == 0:
-        st.caption("Seed сейчас не влияет: поднимите X Jitter или Row Jitter (или пресет Damaged / Glitch).")
-    else:
-        st.caption(f"Активный seed: **{int(st.session_state.get('seed', 0))}**")
-
-    st.header("Look")
-    st.color_picker("Fill", key="fill")
-    st.color_picker("Stroke", key="stroke")
-    st.color_picker("Background", key="background")
+    with st.expander("Цвет", expanded=False):
+        st.color_picker("Fill", key="fill")
+        st.color_picker("Stroke", key="stroke")
+        st.color_picker("Background", key="background")
 
     _persist_presets_to_browser()
 
 params = _current_params()
 font_style = _resolved_font_style()
 
-tab_inspect, tab_words = st.tabs(["Инспектор глифа", "Наборщик текста"])
+tab_words, tab_inspect, tab_styles = st.tabs(
+    ["Наборщик текста", "Инспектор глифа", "Начертания"]
+)
 
 LATIN = [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 CYR = list("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ")
@@ -833,11 +756,9 @@ with tab_words:
     with base_col:
         show_base = st.checkbox("Показать Baseline", value=True)
 
-    with st.expander("Кернинговые пары", expanded=True):
+    with st.expander("Кернинговые пары", expanded=False):
         st.caption(
-            "Пара = 2 символа (напр. АВ). Сдвиг в колонках: "
-            "отрицательный — плотнее, положительный — шире. "
-            "Превью обновляется сразу при движении слайдера."
+            "Пара = 2 символа (напр. АВ). Отрицательный сдвиг — плотнее, положительный — шире."
         )
         kc1, kc2 = st.columns([1, 2])
         with kc1:
@@ -945,7 +866,7 @@ with tab_words:
     show_svg(text_svg_preview, height=min(max(embed_h, 160), 640))
 
     kern_count = len(export_params.kerning_pairs)
-    col_svg, col_json, col_ttf = st.columns(3)
+    col_svg, col_ttf = st.columns(2)
     with col_svg:
         st.download_button(
             label="Экспорт SVG",
@@ -953,16 +874,6 @@ with tab_words:
             file_name="compresso_word.svg",
             mime="image/svg+xml",
             use_container_width=True,
-        )
-    with col_json:
-        json_blob = build_glyphs_json(export_params, family=FAMILY, style=font_style)
-        st.download_button(
-            label=f"Экспорт JSON · {font_style}",
-            data=json_blob.encode("utf-8"),
-            file_name=f"compresso_{style_slug(font_style).lower()}.json",
-            mime="application/json",
-            use_container_width=True,
-            key=f"dl_json_{style_slug(font_style)}",
         )
     with col_ttf:
         try:
@@ -975,45 +886,96 @@ with tab_words:
                 use_container_width=True,
                 key=f"dl_ttf_{style_slug(font_style)}_{kern_count}_{len(ttf_bytes)}",
             )
-            st.caption(
-                f"Начертание: **{font_style}** · кернинг: **{kern_count}** пар"
-            )
+            st.caption(f"Кернинг: **{kern_count}** пар")
         except Exception as exc:  # noqa: BLE001 — surface in UI
             st.error(f"TTF: {exc}")
 
-    st.divider()
-    st.subheader("Экспорт шрифтового семейства (Batch Export)")
-    st.caption(
-        "В архив войдут все built-in пресеты + ваши сохранённые начертания: "
-        "SVG алфавит, specimen, JSON и TTF на каждое."
-    )
-    family_styles = _all_presets()
-    live_name = _resolved_font_style()
-    if live_name not in family_styles:
-        family_styles = dict(family_styles)
-        family_styles[live_name] = snapshot_from_session(dict(st.session_state))
-
-    st.write(f"Начертаний в пакете: **{len(family_styles)}** — " + ", ".join(family_styles.keys()))
-    if st.button("Собрать ZIP семейства", use_container_width=True):
-        try:
-            with st.spinner("Сборка ZIP…"):
-                st.session_state["family_zip_bytes"] = build_family_zip(
-                    family_styles,
-                    family=FAMILY,
-                    specimen=text or DEFAULT_PHRASE,
-                )
-                st.session_state["family_zip_ok"] = True
-        except Exception as exc:  # noqa: BLE001
-            st.session_state["family_zip_ok"] = False
-            st.error(f"ZIP: {exc}")
-
-    zip_bytes = st.session_state.get("family_zip_bytes")
-    if zip_bytes and st.session_state.get("family_zip_ok"):
-        st.download_button(
-            "Скачать CRT_Font_Family_Pack.zip",
-            data=zip_bytes,
-            file_name="CRT_Font_Family_Pack.zip",
-            mime="application/zip",
-            use_container_width=True,
-            key=f"dl_family_zip_{len(zip_bytes)}",
+    with st.expander("Экспорт семейства (ZIP)", expanded=False):
+        st.caption(
+            "В архив: все built-in + ваши сохранённые начертания — SVG алфавит, specimen и TTF."
         )
+        family_styles = _all_presets()
+        live_name = _resolved_font_style()
+        if live_name not in family_styles:
+            family_styles = dict(family_styles)
+            family_styles[live_name] = snapshot_from_session(dict(st.session_state))
+
+        st.write(
+            f"Начертаний: **{len(family_styles)}** — " + ", ".join(family_styles.keys())
+        )
+        if st.button("Собрать ZIP", use_container_width=True):
+            try:
+                with st.spinner("Сборка ZIP…"):
+                    st.session_state["family_zip_bytes"] = build_family_zip(
+                        family_styles,
+                        family=FAMILY,
+                        specimen=text or DEFAULT_PHRASE,
+                    )
+                    st.session_state["family_zip_ok"] = True
+            except Exception as exc:  # noqa: BLE001
+                st.session_state["family_zip_ok"] = False
+                st.error(f"ZIP: {exc}")
+
+        zip_bytes = st.session_state.get("family_zip_bytes")
+        if zip_bytes and st.session_state.get("family_zip_ok"):
+            st.download_button(
+                "Скачать Compresso_Family_Pack.zip",
+                data=zip_bytes,
+                file_name="Compresso_Family_Pack.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key=f"dl_family_zip_{len(zip_bytes)}",
+            )
+
+with tab_styles:
+    st.markdown("### Сохранённые начертания")
+    st.caption(
+        "Встроенные и ваши пресеты. Свои сохраняются в браузере (localStorage). "
+        "Параметры текущего начертания — в боковой панели."
+    )
+
+    all_profiles = _all_presets()
+    preset_names = list(all_profiles.keys())
+    if st.session_state.get("preset_selector") not in preset_names:
+        st.session_state["preset_selector"] = "Regular"
+        st.session_state["active_preset"] = "Regular"
+
+    left, right = st.columns([1, 1])
+    with left:
+        st.selectbox(
+            "Выбрать начертание",
+            options=preset_names,
+            key="preset_selector",
+            on_change=_on_preset_select,
+        )
+        st.caption(f"Активно: **{st.session_state.get('active_preset')}**")
+
+        builtins = [n for n in preset_names if n in BUILTIN_NAMES]
+        customs = [n for n in preset_names if n not in BUILTIN_NAMES]
+        st.markdown("**Встроенные**")
+        st.write(", ".join(builtins) if builtins else "—")
+        st.markdown("**Ваши**")
+        st.write(", ".join(customs) if customs else "Пока нет — сохраните ниже.")
+
+    with right:
+        st.text_input(
+            "Имя для сохранения",
+            key="preset_name_in",
+            placeholder="My Ultra Slant",
+            help="Сохраняет текущие параметры сайдбара под этим именем.",
+        )
+        c_save, c_del = st.columns(2)
+        with c_save:
+            st.button(
+                "Сохранить текущее",
+                use_container_width=True,
+                type="primary",
+                on_click=_save_current_preset,
+            )
+        with c_del:
+            st.button(
+                "Удалить своё",
+                use_container_width=True,
+                on_click=_delete_custom_preset,
+                disabled=str(st.session_state.get("active_preset")) in BUILTIN_NAMES,
+            )
