@@ -125,6 +125,12 @@ def _all_presets() -> dict:
     return merge_profiles(st.session_state.get("custom_presets") or {})
 
 
+def _custom_preset_names() -> list[str]:
+    """Names stored in the user's custom_presets map (may shadow built-ins)."""
+    raw = st.session_state.get("custom_presets") or {}
+    return sorted(str(k).strip() for k in dict(raw) if str(k).strip())
+
+
 def _on_preset_select() -> None:
     _load_preset(str(st.session_state.get("preset_selector") or "Regular"))
 
@@ -139,7 +145,7 @@ def _load_preset(name: str) -> None:
     st.session_state["active_preset"] = name
     st.session_state["preset_selector"] = name
     st.session_state["font_style"] = name
-    st.session_state["preset_name_in"] = name if name not in BUILTIN_NAMES else ""
+    st.session_state["preset_name_in"] = name if name in _custom_preset_names() else ""
 
 
 def _save_current_preset() -> None:
@@ -149,6 +155,9 @@ def _save_current_preset() -> None:
         name = str(st.session_state.get("font_style") or "").strip()
     if not name:
         return
+    if name in BUILTIN_NAMES:
+        # Keep built-in names reserved — require a distinct custom label.
+        name = f"{name} Custom"
     customs = dict(st.session_state.get("custom_presets") or {})
     customs[name] = snapshot_from_session(dict(st.session_state))
     st.session_state["custom_presets"] = customs
@@ -158,16 +167,20 @@ def _save_current_preset() -> None:
     st.session_state["preset_name_in"] = name
 
 
-def _delete_custom_preset() -> None:
-    """Callback: delete the selected custom preset."""
-    name = str(st.session_state.get("active_preset") or "")
-    if name in BUILTIN_NAMES:
-        return
+def _delete_custom_preset(name: str | None = None) -> None:
+    """Remove a custom preset by name (or the current selector if custom)."""
+    target = (name if name is not None else str(st.session_state.get("preset_selector") or "")).strip()
     customs = dict(st.session_state.get("custom_presets") or {})
-    customs.pop(name, None)
+    if not target or target not in customs:
+        return
+    customs.pop(target, None)
     st.session_state["custom_presets"] = customs
-    st.session_state["active_preset"] = "Regular"
-    _load_preset("Regular")
+    active = str(st.session_state.get("active_preset") or "")
+    selected = str(st.session_state.get("preset_selector") or "")
+    if active == target or selected == target:
+        st.session_state["active_preset"] = "Regular"
+        st.session_state["preset_name_in"] = ""
+        _load_preset("Regular")
 
 
 def _reroll_seed() -> None:
@@ -218,18 +231,32 @@ def _on_word_text_change() -> None:
     st.session_state["word_text"] = _to_all_caps(st.session_state.get("word_text", ""))
 
 
-def show_svg(svg: str, *, height: int = 480, scale: float = 1.0) -> None:
-    """Embed SVG as <img>; scale is CSS-only so colors/geometry stay stable."""
+def show_svg(
+    svg: str,
+    *,
+    height: int = 480,
+    scale: float = 1.0,
+    fit: str = "width",
+) -> None:
+    """Embed SVG as <img>.
+
+    fit=\"width\" — scale as % of container width (typesetter).
+    fit=\"contain\" — fit whole glyph inside the box (inspector).
+    """
     payload = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    width_pct = max(5.0, min(float(scale), 1.0) * 100.0)
+    if fit == "contain":
+        img_style = "max-width:100%;max-height:100%;width:auto;height:auto;display:block;margin:auto;"
+    else:
+        width_pct = max(5.0, min(float(scale), 1.0) * 100.0)
+        img_style = f"width:{width_pct:.2f}%;height:auto;display:block;flex-shrink:0;"
     components.html(
         f"""
-        <div style="width:100%;height:{int(height)}px;overflow:auto;background:#000;
-                    display:flex;align-items:center;justify-content:flex-start;
-                    border:1px solid #2A2A2A;border-radius:0.4rem;box-sizing:border-box;">
+        <div style="width:100%;height:{int(height)}px;overflow:hidden;background:#000;
+                    display:flex;align-items:center;justify-content:center;
+                    border:1px solid #2A2A2A;border-radius:0.4rem;box-sizing:border-box;padding:8px;">
           <img src="data:image/svg+xml;base64,{payload}"
                alt="preview"
-               style="width:{width_pct:.2f}%;height:auto;display:block;flex-shrink:0;" />
+               style="{img_style}" />
         </div>
         """,
         height=int(height) + 12,
@@ -390,6 +417,35 @@ def _inject_app_theme() -> None:
             border: 1px solid var(--cps-border) !important;
             border-radius: 0.4rem;
             background: #000 !important;
+          }}
+          /* Dark-theme buttons: white labels on dark surfaces */
+          div[data-testid="stButton"] > button,
+          div[data-testid="stDownloadButton"] > button {{
+            background-color: var(--cps-secondary-bg) !important;
+            color: #FFFFFF !important;
+            border: 1px solid var(--cps-border) !important;
+          }}
+          div[data-testid="stButton"] > button:hover,
+          div[data-testid="stDownloadButton"] > button:hover {{
+            border-color: #FFFFFF !important;
+            color: #FFFFFF !important;
+          }}
+          div[data-testid="stButton"] > button[kind="primary"],
+          div[data-testid="stButton"] > button[data-testid="stBaseButton-primary"] {{
+            background-color: #222222 !important;
+            color: #FFFFFF !important;
+            border: 1px solid #FFFFFF !important;
+            font-weight: 600 !important;
+          }}
+          div[data-testid="stButton"] > button[kind="primary"] p,
+          div[data-testid="stButton"] > button[data-testid="stBaseButton-primary"] p,
+          div[data-testid="stButton"] > button p,
+          div[data-testid="stDownloadButton"] > button p {{
+            color: #FFFFFF !important;
+          }}
+          div[data-testid="stButton"] > button:disabled {{
+            opacity: 0.45 !important;
+            color: var(--cps-muted) !important;
           }}
           section[data-testid="stSidebar"] div[data-testid="stButton"] button {{
             white-space: nowrap !important;
@@ -638,6 +694,19 @@ with st.sidebar:
         help="Попадёт в name table экспортируемого шрифта.",
     )
     st.caption(f"Сейчас: **{_resolved_font_style()}**")
+
+    st.text_input(
+        "Имя начертания",
+        key="preset_name_in",
+        placeholder="My Ultra Slant",
+        help="Под этим именем сохранятся текущие параметры. Имена built-in резервируются.",
+    )
+    st.button(
+        "Сохранить текущее",
+        use_container_width=True,
+        type="primary",
+        on_click=_save_current_preset,
+    )
     st.button(
         "Сбросить к Regular",
         use_container_width=True,
@@ -731,13 +800,7 @@ with tab_inspect:
     inspect_params = with_params(params, show_guides=show_guides, show_grid=show_grid)
     svg = _cached_glyph_svg(letter, params_cache_key(inspect_params))
     with c2:
-        embed_h = int(
-            inspect_params.padding * 2
-            + (ROWS_TOTAL - 1) * inspect_params.step_y
-            + inspect_params.ry * 2
-            + 80
-        )
-        show_svg(svg, height=min(max(embed_h, 420), 900))
+        show_svg(svg, height=420, fit="contain")
         st.download_button(
             label=f"Скачать SVG · {letter}",
             data=svg.encode("utf-8"),
@@ -942,8 +1005,8 @@ with tab_words:
 with tab_styles:
     st.markdown("### Сохранённые начертания")
     st.caption(
-        "Встроенные и ваши пресеты. Свои сохраняются в браузере (localStorage). "
-        "Параметры текущего начертания — в боковой панели."
+        "Выбор и удаление пресетов. Новое сохранение — в боковом меню "
+        "(имя начертания → «Сохранить текущее»). Свои пишутся в localStorage."
     )
 
     all_profiles = _all_presets()
@@ -952,42 +1015,32 @@ with tab_styles:
         st.session_state["preset_selector"] = "Regular"
         st.session_state["active_preset"] = "Regular"
 
-    left, right = st.columns([1, 1])
-    with left:
-        st.selectbox(
-            "Выбрать начертание",
-            options=preset_names,
-            key="preset_selector",
-            on_change=_on_preset_select,
-        )
-        st.caption(f"Активно: **{st.session_state.get('active_preset')}**")
+    st.selectbox(
+        "Выбрать начертание",
+        options=preset_names,
+        key="preset_selector",
+        on_change=_on_preset_select,
+    )
+    st.caption(f"Активно: **{st.session_state.get('active_preset')}**")
 
-        builtins = [n for n in preset_names if n in BUILTIN_NAMES]
-        customs = [n for n in preset_names if n not in BUILTIN_NAMES]
-        st.markdown("**Встроенные**")
-        st.write(", ".join(builtins) if builtins else "—")
-        st.markdown("**Ваши**")
-        st.write(", ".join(customs) if customs else "Пока нет — сохраните ниже.")
+    st.markdown("**Встроенные**")
+    st.caption(", ".join(n for n in preset_names if n in BUILTIN_NAMES) or "—")
 
-    with right:
-        st.text_input(
-            "Имя для сохранения",
-            key="preset_name_in",
-            placeholder="My Ultra Slant",
-            help="Сохраняет текущие параметры сайдбара под этим именем.",
-        )
-        c_save, c_del = st.columns(2)
-        with c_save:
-            st.button(
-                "Сохранить текущее",
-                use_container_width=True,
-                type="primary",
-                on_click=_save_current_preset,
-            )
-        with c_del:
-            st.button(
-                "Удалить своё",
-                use_container_width=True,
-                on_click=_delete_custom_preset,
-                disabled=str(st.session_state.get("active_preset")) in BUILTIN_NAMES,
-            )
+    st.markdown("**Ваши**")
+    custom_names = _custom_preset_names()
+    if not custom_names:
+        st.caption("Пока нет — сохраните из бокового меню.")
+    else:
+        for cname in custom_names:
+            row_l, row_r = st.columns([5, 1])
+            with row_l:
+                is_active = cname == st.session_state.get("active_preset")
+                st.write(f"{'● ' if is_active else ''}{cname}")
+            with row_r:
+                st.button(
+                    "Удалить",
+                    key=f"del_preset_{cname}",
+                    use_container_width=True,
+                    on_click=_delete_custom_preset,
+                    args=(cname,),
+                )
