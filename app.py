@@ -8,6 +8,7 @@ import json
 import streamlit as st
 import streamlit.components.v1 as components
 
+from engine.browser_store import load_presets_blob, save_presets_blob
 from engine.exporter import (
     DEFAULT_STYLE,
     FAMILY,
@@ -190,7 +191,11 @@ def _delete_custom_preset() -> None:
 def _reroll_seed() -> None:
     import random as _random
 
-    st.session_state["seed"] = _random.randint(0, 999_999)
+    st.session_state["seed"] = int(_random.randint(1, 999_999))
+    # Drop cached SVG/TTF so the new seed is visible immediately.
+    _cached_glyph_svg.clear()
+    _cached_text_svg.clear()
+    _cached_ttf_bytes.clear()
 
 
 def _theme_palette(name: str | None = None) -> dict[str, str]:
@@ -555,8 +560,61 @@ def _inject_mobile_sidebar() -> None:
     )
 
 
+def _hydrate_presets_from_browser() -> None:
+    """Restore custom presets from browser localStorage (once per session)."""
+    if st.session_state.get("_presets_ls_ready"):
+        return
+    blob = load_presets_blob()
+    if blob is None:
+        attempts = int(st.session_state.get("_presets_ls_attempts", 0)) + 1
+        st.session_state["_presets_ls_attempts"] = attempts
+        if attempts <= 8:
+            st.caption("Синхронизация пресетов с браузером…")
+            st.stop()
+        # Bridge did not answer — continue without stored presets.
+        blob = {"presets": {}, "active": None}
+
+    raw_presets = blob.get("presets") if isinstance(blob, dict) else {}
+    try:
+        customs, _ = profiles_from_json(
+            json.dumps({"presets": raw_presets or {}, "active": blob.get("active")})
+        )
+    except Exception:  # noqa: BLE001
+        customs = {}
+    st.session_state["custom_presets"] = customs
+    active = blob.get("active") if isinstance(blob, dict) else None
+    if active and str(active) in merge_profiles(customs):
+        st.session_state["_pending_preset"] = str(active)
+    st.session_state["_presets_ls_ready"] = True
+    st.session_state["_presets_ls_nonce"] = 0
+    st.session_state["_presets_ls_last"] = json.dumps(
+        {"format": "compresso-presets-v1", "active": active, "presets": customs},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _persist_presets_to_browser() -> None:
+    """Autosave custom presets (+ active name) into localStorage."""
+    if not st.session_state.get("_presets_ls_ready"):
+        return
+    payload = {
+        "format": "compresso-presets-v1",
+        "active": st.session_state.get("active_preset"),
+        "presets": st.session_state.get("custom_presets") or {},
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if raw == st.session_state.get("_presets_ls_last"):
+        return
+    st.session_state["_presets_ls_last"] = raw
+    nonce = int(st.session_state.get("_presets_ls_nonce", 0)) + 1
+    st.session_state["_presets_ls_nonce"] = nonce
+    save_presets_blob(payload, nonce=str(nonce))
+
+
 # ----- UI -----
 _ensure_defaults()
+_hydrate_presets_from_browser()
 
 _inject_app_theme(str(st.session_state.get("ui_theme", "dark")))
 _inject_mobile_sidebar()
@@ -632,6 +690,7 @@ with st.sidebar:
     st.caption(
         f"В экспорт: **{_resolved_font_style()}** · пресет: **{st.session_state.get('active_preset')}**"
     )
+    st.caption("Свои пресеты автоматически сохраняются в этом браузере (localStorage).")
 
     st.download_button(
         "Скачать профили (JSON)",
@@ -672,13 +731,30 @@ with st.sidebar:
     st.slider("Slant / Skew Angle (°)", -30.0, 30.0, step=0.5, key="slant_angle")
     st.slider("Glitch Intensity (X Jitter)", 0.0, 50.0, step=0.5, key="jitter_x")
     st.slider("Row Jitter (Scanline Shift)", 0.0, 50.0, step=0.5, key="row_jitter")
-    st.slider("Random Seed", 0, 999_999, step=1, key="seed")
-    st.button("Reroll Seed", use_container_width=True, on_click=_reroll_seed)
+    seed_col, roll_col = st.columns([2, 1])
+    with seed_col:
+        st.number_input(
+            "Random Seed",
+            min_value=0,
+            max_value=999_999,
+            step=1,
+            key="seed",
+            help="Меняет паттерн глитча. Работает только если X Jitter или Row Jitter > 0.",
+        )
+    with roll_col:
+        st.write("")  # align with number_input label
+        st.button("Reroll Seed", use_container_width=True, on_click=_reroll_seed)
+    if float(st.session_state.get("jitter_x", 0)) == 0 and float(st.session_state.get("row_jitter", 0)) == 0:
+        st.caption("Seed сейчас не влияет: поднимите X Jitter или Row Jitter (или пресет Damaged / Glitch).")
+    else:
+        st.caption(f"Активный seed: **{int(st.session_state.get('seed', 0))}**")
 
     st.header("Look")
     st.color_picker("Fill", key="fill")
     st.color_picker("Stroke", key="stroke")
     st.color_picker("Background", key="background")
+
+    _persist_presets_to_browser()
 
 params = _current_params()
 font_style = _resolved_font_style()

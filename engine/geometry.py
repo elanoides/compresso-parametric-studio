@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import random
 from dataclasses import dataclass, replace
 from typing import Mapping
 
@@ -84,10 +83,14 @@ def module_center(
 
 
 def _stable_unit(seed: int, *parts: object) -> float:
-    """Deterministic value in ``[-1, 1]`` from seed + parts."""
-    material = "|".join(str(p) for p in (int(seed), *parts))
-    rng = random.Random(material)
-    return rng.uniform(-1.0, 1.0)
+    """Deterministic value in ``[-1, 1]`` from seed + parts (hashlib, not salted hash)."""
+    import hashlib
+
+    material = "|".join(str(p) for p in (int(seed), *parts)).encode("utf-8")
+    digest = hashlib.sha256(material).digest()
+    # Map first 8 bytes to [0, 1), then to [-1, 1]
+    n = int.from_bytes(digest[:8], "big") / float(2**64)
+    return n * 2.0 - 1.0
 
 
 def deform_offset_x(
@@ -101,10 +104,15 @@ def deform_offset_x(
 ) -> float:
     """Horizontal deformation: slant relative to baseline + glitch jitters."""
     dx = (y_baseline - cy) * slant_tan(p)
-    if p.jitter_x:
-        dx += float(p.jitter_x) * _stable_unit(p.seed, "jx", salt, col, row)
-    if p.row_jitter:
-        dx += float(p.row_jitter) * _stable_unit(p.seed, "row", salt, row)
+    jx = float(p.jitter_x)
+    rj = float(p.row_jitter)
+    # Quantize col so float layout positions stay stable in the seed mix.
+    col_q = round(float(col), 4)
+    if jx:
+        dx += jx * _stable_unit(p.seed, "jx", salt, col_q, int(row))
+    if rj:
+        # Scanline shift is per row only (same for every glyph on that row).
+        dx += rj * _stable_unit(p.seed, "row", int(row))
     return dx
 
 
