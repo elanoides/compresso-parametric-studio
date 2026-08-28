@@ -10,6 +10,19 @@ import base64
 import streamlit as st
 import streamlit.components.v1 as components
 
+from engine.presets import (
+    BUILTIN_PRESETS,
+    DEFAULT_PRESET_NAMES,
+    PROTECTED_FROM_DELETE,
+    apply_profile_to_session,
+    canonical_preset_name,
+    ensure_presets_store,
+    is_user_preset,
+    merge_imported_presets,
+    presets_library_to_json,
+    profiles_from_json,
+    snapshot_from_session,
+)
 from engine.browser_store import load_presets_blob, save_presets_blob
 from engine.exporter import (
     DEFAULT_STYLE,
@@ -47,19 +60,6 @@ from engine.module_types import (
     MODULE_TYPE_BY_LABEL,
     MODULE_TYPE_LABELS,
     MODULE_LABEL_BY_TYPE,
-)
-from engine.presets import (
-    BUILTIN_PRESETS,
-    DEFAULT_PRESET_NAMES,
-    PROTECTED_FROM_DELETE,
-    apply_profile_to_session,
-    canonical_preset_name,
-    ensure_presets_store,
-    is_user_preset,
-    merge_imported_presets,
-    presets_library_to_json,
-    profiles_from_json,
-    snapshot_from_session,
 )
 from engine.render import render_glyph_svg, render_text_svg
 

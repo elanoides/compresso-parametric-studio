@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Built-in and custom style presets for Compresso Parametric Studio."""
 
 from __future__ import annotations
