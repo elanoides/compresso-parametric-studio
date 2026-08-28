@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import base64
+import hashlib
 import json
+
+import base64
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -17,12 +19,34 @@ from engine.exporter import (
     normalize_style_name,
     style_slug,
 )
-from engine.geometry import RenderParams, params_cache_key, params_from_cache_key, with_params
+from engine.render_params import RenderParams
+from engine.geometry import params_cache_key, params_from_cache_key, with_params
 from engine.glyphs import (
     BASELINE,
     ROWS_TOTAL,
     get_glyph,
     glyph_width,
+)
+from engine.live_params import enrich_live_params
+from engine.live_studio import live_studio, session_params_for_live
+from engine.module_font_catalog import (
+    list_module_fonts,
+    module_font_catalog,
+    module_font_subfamilies,
+    module_font_weights,
+    resolve_module_font_file,
+    subfamily_and_weight_for_file,
+)
+from engine.module_stamp import parse_custom_svg_markup
+from engine.module_types import (
+    FILL_ORDER_BY_LABEL,
+    FILL_ORDER_LABELS,
+    MODULE_CUSTOM_SVG,
+    MODULE_FONT,
+    MODULE_OVAL,
+    MODULE_TYPE_BY_LABEL,
+    MODULE_TYPE_LABELS,
+    MODULE_LABEL_BY_TYPE,
 )
 from engine.presets import (
     BUILTIN_NAMES,
@@ -36,10 +60,11 @@ from engine.presets import (
 from engine.render import render_glyph_svg, render_text_svg
 
 # ----- Regular (Default) -----
-REGULAR_VERSION = 8
-REGULAR: dict[str, float | int | str] = {
+REGULAR_VERSION = 12
+REGULAR: dict[str, float | int | str | bool] = {
     "rx": 30.0,
     "ry": 10.0,
+    "module_angle": 0.0,
     "stroke_width": 0.0,
     "fill_opacity": 1.0,
     "step_x": 38.5,
@@ -54,6 +79,14 @@ REGULAR: dict[str, float | int | str] = {
     "jitter_x": 0.0,
     "row_jitter": 0.0,
     "seed": 0,
+    "module_type": MODULE_OVAL,
+    "custom_svg_markup": "",
+    "module_font_file": "",
+    "module_font_subfamily": "",
+    "module_font_weight": "",
+    "module_font_chars": "",
+    "module_font_fill_order": "columns",
+    "module_font_randomize": False,
 }
 
 DEFAULT_PHRASE = "НОБЕЛЬФАЙК"
@@ -98,6 +131,15 @@ def _ensure_defaults() -> None:
         st.session_state.setdefault("active_preset", "Regular")
         st.session_state.setdefault("preset_name_in", "")
         st.session_state.setdefault("preset_selector", "Regular")
+        st.session_state.setdefault("word_show_guides", False)
+        st.session_state.setdefault("word_show_grid", False)
+        st.session_state.setdefault("inspect_show_guides", True)
+        st.session_state.setdefault("inspect_show_grid", False)
+        st.session_state.setdefault("inspect_letter", "А")
+        st.session_state.setdefault("_live_cmd_id", 0)
+        st.session_state.setdefault("_export_cache_rev", 0)
+        st.session_state.setdefault("_custom_svg_upload_id", "")
+        _ensure_module_font_default()
         # Always white-on-black after migration
         st.session_state["fill"] = "#FFFFFF"
         st.session_state["stroke"] = "#FFFFFF"
@@ -115,6 +157,144 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("active_preset", "Regular")
     st.session_state.setdefault("preset_name_in", "")
     st.session_state.setdefault("preset_selector", "Regular")
+    st.session_state.setdefault("word_show_guides", False)
+    st.session_state.setdefault("word_show_grid", False)
+    st.session_state.setdefault("inspect_show_guides", True)
+    st.session_state.setdefault("inspect_show_grid", False)
+    st.session_state.setdefault("inspect_letter", "А")
+    st.session_state.setdefault("_live_cmd_id", 0)
+    st.session_state.setdefault("_export_cache_rev", 0)
+    st.session_state.setdefault("_custom_svg_upload_id", "")
+    _ensure_module_font_default()
+
+
+def _ensure_module_font_default() -> None:
+    """Sync subfamily/weight/file selectors with ``assets/module_fonts/``."""
+    catalog = module_font_catalog()
+    if not catalog:
+        return
+
+    current_file = str(st.session_state.get("module_font_file") or "")
+    all_files = list_module_fonts()
+    if current_file and current_file in all_files:
+        subfamily, weight = subfamily_and_weight_for_file(current_file)
+        weights = module_font_weights(subfamily)
+        if weight not in weights:
+            for label, filename in weights.items():
+                if filename == current_file:
+                    weight = label
+                    break
+        st.session_state.setdefault("module_font_subfamily", subfamily)
+        st.session_state.setdefault("module_font_weight", weight)
+    else:
+        subfamily = st.session_state.get("module_font_subfamily") or next(iter(catalog))
+        if subfamily not in catalog:
+            subfamily = next(iter(catalog))
+        weights = catalog[subfamily]
+        weight = st.session_state.get("module_font_weight") or next(iter(weights))
+        if weight not in weights:
+            weight = next(iter(weights))
+        st.session_state["module_font_subfamily"] = subfamily
+        st.session_state["module_font_weight"] = weight
+        st.session_state["module_font_file"] = weights[weight]
+
+
+def _on_module_font_subfamily_change() -> None:
+    """When subfamily changes, pick the first weight."""
+    subfamily = str(st.session_state.get("module_font_subfamily") or "")
+    weights = module_font_weights(subfamily)
+    if not weights:
+        return
+    weight = next(iter(weights))
+    st.session_state["module_font_weight"] = weight
+    st.session_state["module_font_file"] = weights[weight]
+    _bump_export_cache()
+    _push_live_command()
+
+
+def _sync_module_font_file_from_selectors() -> None:
+    """Keep ``module_font_file`` aligned with subfamily + weight."""
+    subfamily = str(st.session_state.get("module_font_subfamily") or "")
+    weight = str(st.session_state.get("module_font_weight") or "")
+    try:
+        st.session_state["module_font_file"] = resolve_module_font_file(subfamily, weight)
+    except KeyError:
+        _ensure_module_font_default()
+
+
+def _on_module_type_change() -> None:
+    """Sync stored module_type and refresh the JS preview."""
+    label = str(st.session_state.get("module_type_label") or MODULE_TYPE_LABELS[0])
+    st.session_state["module_type"] = MODULE_TYPE_BY_LABEL.get(label, MODULE_OVAL)
+    _bump_export_cache()
+    _push_live_command()
+
+
+def _sync_module_type_label() -> None:
+    """Keep radio label in sync with stored module_type."""
+    mt = str(st.session_state.get("module_type") or MODULE_OVAL)
+    label = MODULE_LABEL_BY_TYPE.get(mt, MODULE_TYPE_LABELS[0])
+    st.session_state.setdefault("module_type_label", label)
+    if st.session_state.get("module_type_label") not in MODULE_TYPE_LABELS:
+        st.session_state["module_type_label"] = label
+
+
+def _push_live_command() -> None:
+    """Push current session params to the JS preview (preset / reset)."""
+    st.session_state["_live_cmd_id"] = int(st.session_state.get("_live_cmd_id", 0)) + 1
+    st.session_state["_live_cmd"] = {"params": enrich_live_params(st.session_state)}
+
+
+def _live_kerning_dict() -> dict[str, float]:
+    kern: dict[str, float] = dict(st.session_state.get("kerning_pairs") or {})
+    draft = _normalize_kern_pair(st.session_state.get("kern_pair_in") or "")
+    if draft is not None:
+        kern[draft] = float(st.session_state.get("kern_delta_in", 0.0))
+    return kern
+
+
+def _clear_render_cache() -> None:
+    _cached_glyph_svg.clear()
+    _cached_text_svg.clear()
+    _cached_ttf_bytes.clear()
+
+
+def _module_stamp_digest() -> str:
+    """Hash of module stamp payload — busts export cache when SVG/font module changes."""
+    mt = str(st.session_state.get("module_type") or MODULE_OVAL)
+    if mt == MODULE_CUSTOM_SVG:
+        raw = str(st.session_state.get("custom_svg_markup") or "")
+    elif mt == MODULE_FONT:
+        raw = "|".join(
+            (
+                str(st.session_state.get("module_font_file") or ""),
+                str(st.session_state.get("module_font_chars") or ""),
+                str(st.session_state.get("module_font_fill_order") or ""),
+                str(bool(st.session_state.get("module_font_randomize", False))),
+                str(int(st.session_state.get("module_font_symbols_per_module", 1))),
+            )
+        )
+    else:
+        raw = mt
+    rev = int(st.session_state.get("_export_cache_rev", 0))
+    return hashlib.sha256(f"{rev}|{raw}".encode()).hexdigest()[:16]
+
+
+def _bump_export_cache() -> None:
+    st.session_state["_export_cache_rev"] = int(st.session_state.get("_export_cache_rev", 0)) + 1
+    _clear_render_cache()
+
+
+def _apply_custom_svg_upload(uploaded) -> None:
+    """Parse uploaded SVG once; ``UploadedFile.read()`` is single-shot on reruns."""
+    upload_id = f"{uploaded.name}:{uploaded.size}:{getattr(uploaded, 'file_id', '')}"
+    if st.session_state.get("_custom_svg_upload_id") == upload_id:
+        return
+    markup = parse_custom_svg_markup(uploaded.getvalue())
+    st.session_state["custom_svg_markup"] = markup
+    st.session_state["_custom_svg_upload_id"] = upload_id
+    _bump_export_cache()
+    _push_live_command()
 
 
 def _resolved_font_style() -> str:
@@ -134,6 +314,9 @@ def _custom_preset_names() -> list[str]:
 
 def _on_preset_select() -> None:
     _load_preset(str(st.session_state.get("preset_selector") or "Regular"))
+    _clear_render_cache()
+    _push_live_command()
+    st.rerun()
 
 
 def _load_preset(name: str) -> None:
@@ -182,16 +365,23 @@ def _delete_custom_preset(name: str | None = None) -> None:
         st.session_state["active_preset"] = "Regular"
         st.session_state["preset_name_in"] = ""
         _load_preset("Regular")
+    _clear_render_cache()
+    _push_live_command()
+    st.rerun()
 
 
 def _reroll_seed() -> None:
     import random as _random
 
     st.session_state["seed"] = int(_random.randint(1, 999_999))
-    # Drop cached SVG/TTF so the new seed is visible immediately.
-    _cached_glyph_svg.clear()
-    _cached_text_svg.clear()
-    _cached_ttf_bytes.clear()
+    _clear_render_cache()
+
+
+def _set_module_angle(angle: float) -> None:
+    st.session_state["module_angle"] = float(angle)
+    _clear_render_cache()
+    _push_live_command()
+    st.rerun()
 
 
 def _theme_palette() -> dict[str, str]:
@@ -215,21 +405,20 @@ def _reset_to_regular() -> None:
     st.session_state["preset_selector"] = "Regular"
     st.session_state["font_style"] = "Regular"
     st.session_state["preset_name_in"] = ""
+    _clear_render_cache()
+    _push_live_command()
+    st.rerun()
 
 
-def _to_all_caps(s: str) -> str:
+def _to_all_caps(s: str | None) -> str:
     """Force All-Caps; ё/Ё → Ё."""
     out: list[str] = []
-    for ch in s:
+    for ch in str(s or ""):
         if ch in "ёЁ":
             out.append("Ё")
         else:
             out.append(ch.upper())
     return "".join(out)
-
-
-def _on_word_text_change() -> None:
-    st.session_state["word_text"] = _to_all_caps(st.session_state.get("word_text", ""))
 
 
 def show_svg(
@@ -239,28 +428,23 @@ def show_svg(
     scale: float = 1.0,
     fit: str = "width",
 ) -> None:
-    """Embed SVG as <img>.
-
-    fit=\"width\" — scale as % of container width (typesetter).
-    fit=\"contain\" — fit whole glyph inside the box (inspector).
-    """
+    """Inline SVG preview via ``st.html`` + data-uri (safe, no iframe)."""
     payload = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    box_style = (
+        f"width:100%;min-height:{int(height)}px;background:#000;"
+        "display:flex;align-items:center;justify-content:center;"
+        "border:1px solid #2A2A2A;border-radius:0.4rem;box-sizing:border-box;"
+        "padding:8px;overflow:auto;"
+    )
     if fit == "contain":
-        img_style = "max-width:100%;max-height:100%;width:auto;height:auto;display:block;margin:auto;"
+        img_style = "max-width:100%;max-height:100%;width:auto;height:auto;display:block;"
     else:
         width_pct = max(5.0, min(float(scale), 1.0) * 100.0)
-        img_style = f"width:{width_pct:.2f}%;height:auto;display:block;flex-shrink:0;"
-    components.html(
-        f"""
-        <div style="width:100%;height:{int(height)}px;overflow:hidden;background:#000;
-                    display:flex;align-items:center;justify-content:center;
-                    border:1px solid #2A2A2A;border-radius:0.4rem;box-sizing:border-box;padding:8px;">
-          <img src="data:image/svg+xml;base64,{payload}"
-               alt="preview"
-               style="{img_style}" />
-        </div>
-        """,
-        height=int(height) + 12,
+        img_style = f"width:{width_pct:.2f}%;height:auto;display:block;margin:0 auto;"
+    st.html(
+        f'<div style="{box_style}">'
+        f'<img src="data:image/svg+xml;base64,{payload}" alt="preview" style="{img_style}" />'
+        f"</div>"
     )
 
 
@@ -313,6 +497,14 @@ def _current_params(*, show_guides: bool = False, show_grid: bool = False, previ
         jitter_x=float(st.session_state.get("jitter_x", 0.0)),
         row_jitter=float(st.session_state.get("row_jitter", 0.0)),
         seed=int(st.session_state.get("seed", 0)),
+        module_angle=float(st.session_state.get("module_angle", 0.0)),
+        module_type=str(st.session_state.get("module_type", MODULE_OVAL)),
+        custom_svg_markup=str(st.session_state.get("custom_svg_markup") or ""),
+        module_font_file=str(st.session_state.get("module_font_file") or ""),
+        module_font_chars=str(st.session_state.get("module_font_chars") or ""),
+        module_font_fill_order=str(st.session_state.get("module_font_fill_order") or "columns"),
+        module_font_randomize=bool(st.session_state.get("module_font_randomize", False)),
+        module_font_symbols_per_module=int(st.session_state.get("module_font_symbols_per_module", 1)),
     )
 
 
@@ -322,13 +514,15 @@ def _cached_glyph_svg(ch: str, key: tuple) -> str:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_text_svg(text: str, key: tuple) -> str:
+def _cached_text_svg(text: str, key: tuple, stamp_digest: str) -> str:
+    del stamp_digest
     return render_text_svg(text, params_from_cache_key(key))
 
 
 @st.cache_data(show_spinner="Сборка TTF…")
-def _cached_ttf_bytes(key: tuple, style: str) -> bytes:
+def _cached_ttf_bytes(key: tuple, style: str, stamp_digest: str) -> bytes:
     """Build TTF from a cache key + style name (always matches current export)."""
+    del stamp_digest  # cache buster only — full stamp is inside ``key``
     p = with_params(params_from_cache_key(key), show_guides=False, show_grid=False, preview_scale=1.0)
     return build_ttf_bytes(p, family=FAMILY, style=style)
 
@@ -418,6 +612,12 @@ def _inject_app_theme() -> None:
           [data-baseweb="tab"][aria-selected="true"] {{
             color: var(--cps-text) !important;
             border-bottom-color: var(--cps-text) !important;
+          }}
+          div[data-testid="stSegmentedControl"] {{
+            margin-bottom: 1rem;
+          }}
+          div[data-testid="stSegmentedControl"] label {{
+            width: 100%;
           }}
           div[data-baseweb="input"] > div,
           div[data-baseweb="select"] > div,
@@ -700,6 +900,7 @@ def _persist_presets_to_browser() -> None:
 
 # ----- UI -----
 _ensure_defaults()
+_sync_module_type_label()
 _hydrate_presets_from_browser()
 
 _inject_app_theme()
@@ -727,7 +928,7 @@ with st.sidebar:
         "Имя начертания",
         key="preset_name_in",
         placeholder="My Ultra Slant",
-        help="Под этим именем сохранятся текущие параметры. Имена built-in резервируются.",
+        help="Имя для сохранения пользовательского пресета.",
     )
     st.button(
         "Сохранить текущее",
@@ -741,17 +942,108 @@ with st.sidebar:
         on_click=_reset_to_regular,
     )
 
-    with st.expander("Цвет", expanded=False):
-        st.caption("Не меняется при выборе пресета — только вручную или при сбросе.")
-        st.color_picker("Fill", key="fill")
-        st.color_picker("Stroke", key="stroke")
-        st.color_picker("Background", key="background")
+    _all = _all_presets()
+    _preset_names = list(_all.keys())
+    if st.session_state.get("preset_selector") not in _preset_names:
+        st.session_state["preset_selector"] = "Regular"
+        st.session_state["active_preset"] = "Regular"
+    st.selectbox(
+        "Начертание",
+        options=_preset_names,
+        key="preset_selector",
+        on_change=_on_preset_select,
+    )
+    st.caption(f"Активно: **{st.session_state.get('active_preset')}**")
 
     with st.expander("Модуль", expanded=False):
-        st.slider("Radius X (rx)", 1.0, 90.0, step=0.5, key="rx")
-        st.slider("Radius Y (ry)", 0.5, 40.0, step=0.5, key="ry")
-        st.slider("Stroke width", 0.0, 6.0, step=0.1, key="stroke_width")
-        st.slider("Fill opacity", 0.0, 1.0, step=0.05, key="fill_opacity")
+        module_label = st.radio(
+            "Тип модуля",
+            MODULE_TYPE_LABELS,
+            horizontal=True,
+            key="module_type_label",
+            on_change=_on_module_type_change,
+        )
+        st.session_state["module_type"] = MODULE_TYPE_BY_LABEL[module_label]
+
+        if st.session_state["module_type"] == MODULE_OVAL:
+            st.slider("Radius X (rx)", 5.0, 100.0, step=0.5, key="rx")
+            st.slider("Radius Y (ry)", 2.0, 200.0, step=0.5, key="ry")
+            st.slider("Stroke width", 0.0, 6.0, step=0.1, key="stroke_width")
+            st.slider("Fill opacity", 0.0, 1.0, step=0.05, key="fill_opacity")
+
+        elif st.session_state["module_type"] == MODULE_CUSTOM_SVG:
+            uploaded = st.file_uploader(
+                "Загрузить SVG",
+                type=["svg"],
+                key="custom_svg_upload",
+            )
+            if uploaded is not None:
+                try:
+                    _apply_custom_svg_upload(uploaded)
+                except ValueError as exc:
+                    st.error(str(exc))
+            if st.session_state.get("custom_svg_markup"):
+                st.caption("SVG загружен — модули используют этот контур.")
+            st.slider("Radius X (rx)", 5.0, 100.0, step=0.5, key="rx")
+            st.slider("Radius Y (ry)", 2.0, 200.0, step=0.5, key="ry")
+            st.slider("Stroke width", 0.0, 6.0, step=0.1, key="stroke_width")
+            st.slider("Fill opacity", 0.0, 1.0, step=0.05, key="fill_opacity")
+
+        else:
+            subfamilies = module_font_subfamilies()
+            if subfamilies:
+                _ensure_module_font_default()
+                if st.session_state.get("module_font_subfamily") not in subfamilies:
+                    st.session_state["module_font_subfamily"] = subfamilies[0]
+                st.selectbox(
+                    "Гарнитура",
+                    subfamilies,
+                    key="module_font_subfamily",
+                    on_change=_on_module_font_subfamily_change,
+                )
+                subfamily = str(st.session_state.get("module_font_subfamily"))
+                weights = module_font_weights(subfamily)
+                weight_names = list(weights.keys())
+                if st.session_state.get("module_font_weight") not in weight_names:
+                    st.session_state["module_font_weight"] = weight_names[0]
+                st.selectbox(
+                    "Толщина",
+                    weight_names,
+                    key="module_font_weight",
+                )
+                _sync_module_font_file_from_selectors()
+            else:
+                st.warning("Положите `.ttf`/`.otf` в `assets/module_fonts/`.")
+            st.text_input(
+                "Строка символов",
+                placeholder="01, *#@!, ABC — пусто = A–Z, А–Я, 0–9",
+                key="module_font_chars",
+            )
+            st.slider("Высота ячейки (ry)", 2.0, 200.0, step=0.5, key="ry")
+            st.caption("Размер символа задаётся высотой ячейки (ry).")
+            fill_label = st.selectbox(
+                "Порядок заполнения",
+                FILL_ORDER_LABELS,
+                index=0
+                if st.session_state.get("module_font_fill_order", "columns") == "columns"
+                else 1,
+                key="module_font_fill_order_label",
+            )
+            st.session_state["module_font_fill_order"] = FILL_ORDER_BY_LABEL[fill_label]
+            st.checkbox("Рандом (Randomize)", key="module_font_randomize")
+            st.slider("Stroke width", 0.0, 6.0, step=0.1, key="stroke_width")
+            st.slider("Fill opacity", 0.0, 1.0, step=0.05, key="fill_opacity")
+
+        st.slider("Module Angle (°)", -90.0, 90.0, step=1.0, key="module_angle")
+        q0, q45, qm45, q90 = st.columns(4)
+        with q0:
+            st.button("0°", use_container_width=True, on_click=_set_module_angle, args=(0.0,))
+        with q45:
+            st.button("45°", use_container_width=True, on_click=_set_module_angle, args=(45.0,))
+        with qm45:
+            st.button("-45°", use_container_width=True, on_click=_set_module_angle, args=(-45.0,))
+        with q90:
+            st.button("90°", use_container_width=True, on_click=_set_module_angle, args=(90.0,))
 
     with st.expander("Интервалы и плотность", expanded=False):
         st.slider("Grid step X", 2.0, 60.0, step=0.5, key="step_x")
@@ -763,16 +1055,15 @@ with st.sidebar:
     with st.expander("Деформации и FX", expanded=False):
         st.slider("Slant / Skew (°)", -30.0, 30.0, step=0.5, key="slant_angle")
         st.slider("Glitch (X Jitter)", 0.0, 50.0, step=0.5, key="jitter_x")
-        st.slider("Row Jitter", 0.0, 50.0, step=0.5, key="row_jitter")
+        st.slider("Row Jitter (Scanline Shift)", 0.0, 50.0, step=0.5, key="row_jitter")
         seed_col, roll_col = st.columns([2, 1])
         with seed_col:
             st.number_input(
-                "Seed",
+                "Random Seed",
                 min_value=0,
                 max_value=999_999,
                 step=1,
                 key="seed",
-                help="Паттерн глитча. Работает только если X Jitter или Row Jitter > 0.",
             )
         with roll_col:
             st.write("")
@@ -781,12 +1072,21 @@ with st.sidebar:
             st.session_state.get("row_jitter", 0)
         ) == 0:
             st.caption("Seed не влияет, пока jitter = 0.")
-        else:
-            st.caption(f"Seed: **{int(st.session_state.get('seed', 0))}**")
+
+    with st.expander("Цвет", expanded=False):
+        st.caption("Не меняется при выборе пресета — только вручную или при сбросе.")
+        st.color_picker("Fill (модули)", key="fill")
+        st.color_picker("Stroke (обводка)", key="stroke")
+        st.color_picker("Background (фон)", key="background")
+
+    mt = str(st.session_state.get("module_type") or MODULE_OVAL)
+    if mt == MODULE_CUSTOM_SVG and st.session_state.get("custom_svg_markup"):
+        _push_live_command()
+    elif mt == MODULE_FONT and st.session_state.get("module_font_file"):
+        _push_live_command()
 
     _persist_presets_to_browser()
 
-params = _current_params()
 font_style = _resolved_font_style()
 
 tab_words, tab_inspect, tab_styles = st.tabs(
@@ -798,66 +1098,49 @@ CYR = list("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ")
 DIGITS = list("0123456789")
 PUNCT = list(".,:;!?/+-=")
 
-with tab_inspect:
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        group = st.radio(
-            "Набор",
-            ["Латиница A–Z", "Кириллица А–Я", "Цифры 0–9", "Пунктуация"],
-            index=1,
-        )
-        pool = {
-            "Латиница A–Z": LATIN,
-            "Кириллица А–Я": CYR,
-            "Цифры 0–9": DIGITS,
-            "Пунктуация": PUNCT,
-        }[group]
-        letter = st.selectbox("Символ", pool, index=0)
-        show_guides = st.checkbox("Baseline / Cap-Height", value=True)
-        show_grid = st.checkbox("Сетка осей", value=True)
-        pts = get_glyph(letter)
-        st.write(f"Модулей в глифе: **{len(pts)}**")
-        if pts:
-            rows = sorted({r for _, r in pts})
-            st.code(
-                f"width cols: {glyph_width(letter)}\n"
-                f"row span: {min(rows)}…{max(rows)}\n"
-                f"baseline: {BASELINE}",
-                language="text",
-            )
-
-    inspect_params = with_params(params, show_guides=show_guides, show_grid=show_grid)
-    svg = _cached_glyph_svg(letter, params_cache_key(inspect_params))
-    with c2:
-        show_svg(svg, height=420, fit="contain")
-        st.download_button(
-            label=f"Скачать SVG · {letter}",
-            data=svg.encode("utf-8"),
-            file_name=f"compresso_glyph_{letter}.svg",
-            mime="image/svg+xml",
-            use_container_width=True,
-        )
-
 with tab_words:
-    st.text_input(
-        "Строка (All-Caps)",
-        key="word_text",
-        on_change=_on_word_text_change,
-    )
-    text = _to_all_caps(st.session_state["word_text"])
+    st.text_input("Строка (All-Caps)", key="word_text")
+    text = _to_all_caps(st.session_state.get("word_text")) or DEFAULT_PHRASE
 
-    size_col, base_col = st.columns([2, 1])
-    with size_col:
+    pc1, pc2, pc3 = st.columns([2, 1, 1])
+    with pc1:
         st.slider(
             "Размер шрифта (превью)",
             min_value=0.15,
             max_value=1.0,
             step=0.01,
             key="font_size",
-            help="Масштаб предпросмотра наборщика. Экспорт SVG/TTF — в полном размере.",
         )
-    with base_col:
-        show_base = st.checkbox("Показать Baseline", value=True)
+    with pc2:
+        st.checkbox("Показать Baseline", key="word_show_guides")
+    with pc3:
+        st.checkbox("Сетка модулей", key="word_show_grid")
+
+    preview_scale = float(st.session_state.get("font_size", DEFAULT_FONT_SIZE))
+    live_params = enrich_live_params(st.session_state)
+    live_studio(
+        preview_only=True,
+        mode="text",
+        text=text,
+        params=live_params,
+        kerning_pairs=_live_kerning_dict(),
+        show_guides=bool(st.session_state.get("word_show_guides")),
+        show_grid=bool(st.session_state.get("word_show_grid")),
+        preview_scale=preview_scale,
+        command=st.session_state.get("_live_cmd"),
+        command_id=int(st.session_state.get("_live_cmd_id", 0)),
+        height=520,
+        key="cps_live_preview_word",
+    )
+
+    params = _current_params()
+    word_preview_params = with_params(
+        params,
+        show_guides=bool(st.session_state.get("word_show_guides")),
+        show_grid=bool(st.session_state.get("word_show_grid")),
+        preview_scale=preview_scale,
+        kerning_pairs=tuple(sorted((k, float(v)) for k, v in _live_kerning_dict().items())),
+    )
 
     with st.expander("Кернинговые пары", expanded=False):
         st.caption(
@@ -874,7 +1157,6 @@ with tab_words:
                 key="kern_delta_in",
             )
             draft_pair = _normalize_kern_pair(st.session_state.get("kern_pair_in") or "")
-            draft_delta = float(st.session_state.get("kern_delta_in", 0.0))
             st.button(
                 "Сохранить пару",
                 use_container_width=True,
@@ -883,28 +1165,10 @@ with tab_words:
             )
 
         with kc2:
-            # Live pair preview: saved kerning + current draft override
-            live_kern = dict(st.session_state.get("kerning_pairs") or {})
-            preview_label = "—"
-            if draft_pair:
-                live_kern[draft_pair] = draft_delta
-                preview_label = f"{draft_pair}  ({draft_delta:+.2f})"
-                pair_text = draft_pair
+            if draft_pair is not None:
+                st.caption(f"Превью пары **{draft_pair}** — в строке выше.")
             else:
-                pair_text = "АВ"
-                preview_label = "введите пару"
-
-            live_pairs_tuple = tuple(sorted((k, float(v)) for k, v in live_kern.items()))
-            kern_preview_params = with_params(
-                params,
-                show_guides=True,
-                show_grid=False,
-                preview_scale=0.55,
-                kerning_pairs=live_pairs_tuple,
-            )
-            st.caption(f"Превью: **{preview_label}**")
-            pair_svg = _cached_text_svg(pair_text, params_cache_key(kern_preview_params))
-            show_svg(pair_svg, height=220)
+                st.caption("Введите пару из двух символов для превью.")
 
         current: dict[str, float] = dict(st.session_state.get("kerning_pairs") or {})
         if current:
@@ -930,44 +1194,15 @@ with tab_words:
         else:
             st.info("Сохранённых пар пока нет — двигайте слайдер, смотрите превью, затем «Сохранить».")
 
-    # Draft kerning also affects the main word preview in real time
-    live_kern_for_word = dict(st.session_state.get("kerning_pairs") or {})
-    draft_pair_w = _normalize_kern_pair(st.session_state.get("kern_pair_in") or "")
-    if draft_pair_w is not None:
-        live_kern_for_word[draft_pair_w] = float(st.session_state.get("kern_delta_in", 0.0))
-
-    params = _current_params()
-    live_tuple = tuple(sorted((k, float(v)) for k, v in live_kern_for_word.items()))
-    params_live = with_params(params, kerning_pairs=live_tuple)
-    font_size = float(st.session_state["font_size"])
-    # Geometry always at full size; visual scale is CSS-only (avoids color/iframe breakage).
-    word_params = with_params(
-        params_live,
-        show_guides=show_base,
-        show_grid=False,
-        preview_scale=1.0,
-    )
     export_params = with_params(
-        params_live,
+        word_preview_params,
         show_guides=False,
         show_grid=False,
         preview_scale=1.0,
     )
-
-    text_svg_preview = _cached_text_svg(text, params_cache_key(word_params))
-    text_svg_export = _cached_text_svg(text, params_cache_key(export_params))
-
-    embed_h = int(
-        (
-            word_params.padding * 2
-            + (ROWS_TOTAL - 1) * word_params.step_y
-            + word_params.ry * 2
-            + 60
-        )
-        * font_size
-        + 48
-    )
-    show_svg(text_svg_preview, height=min(max(embed_h, 160), 640), scale=font_size)
+    stamp_digest = _module_stamp_digest()
+    cache_key = params_cache_key(export_params)
+    text_svg_export = _cached_text_svg(text, cache_key, stamp_digest)
 
     kern_count = len(export_params.kerning_pairs)
     col_svg, col_ttf = st.columns(2)
@@ -978,17 +1213,18 @@ with tab_words:
             file_name="compresso_word.svg",
             mime="image/svg+xml",
             use_container_width=True,
+            key=f"dl_svg_{stamp_digest}",
         )
     with col_ttf:
         try:
-            ttf_bytes = _cached_ttf_bytes(params_cache_key(export_params), font_style)
+            ttf_bytes = _cached_ttf_bytes(cache_key, font_style, stamp_digest)
             st.download_button(
                 label=f"Скачать TTF · {font_style}",
                 data=ttf_bytes,
                 file_name=f"Compresso-Parametric-{style_slug(font_style)}.ttf",
                 mime="font/ttf",
                 use_container_width=True,
-                key=f"dl_ttf_{style_slug(font_style)}_{kern_count}_{len(ttf_bytes)}",
+                key=f"dl_ttf_{stamp_digest}_{style_slug(font_style)}",
             )
             st.caption(f"Кернинг: **{kern_count}** пар")
         except Exception as exc:  # noqa: BLE001 — surface in UI
@@ -1031,26 +1267,71 @@ with tab_words:
                 key=f"dl_family_zip_{len(zip_bytes)}",
             )
 
+with tab_inspect:
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        group = st.radio(
+            "Набор",
+            ["Латиница A–Z", "Кириллица А–Я", "Цифры 0–9", "Пунктуация"],
+            index=1,
+        )
+        pool = {
+            "Латиница A–Z": LATIN,
+            "Кириллица А–Я": CYR,
+            "Цифры 0–9": DIGITS,
+            "Пунктуация": PUNCT,
+        }[group]
+        letter = st.selectbox("Символ", pool, index=0, key="inspect_letter")
+        st.checkbox("Baseline / Cap-Height", key="inspect_show_guides")
+        st.checkbox("Сетка модулей", key="inspect_show_grid")
+        pts = get_glyph(letter)
+        st.write(f"Модулей в глифе: **{len(pts)}**")
+        if pts:
+            rows = sorted({r for _, r in pts})
+            st.code(
+                f"width cols: {glyph_width(letter)}\n"
+                f"row span: {min(rows)}…{max(rows)}\n"
+                f"baseline: {BASELINE}",
+                language="text",
+            )
+
+    params = _current_params()
+    inspect_params = with_params(
+        params,
+        show_guides=bool(st.session_state.get("inspect_show_guides")),
+        show_grid=bool(st.session_state.get("inspect_show_grid")),
+    )
+    with c2:
+        live_studio(
+            preview_only=True,
+            mode="glyph",
+            glyph=str(st.session_state.get("inspect_letter", "А")),
+            params=enrich_live_params(st.session_state),
+            show_guides=bool(st.session_state.get("inspect_show_guides")),
+            show_grid=bool(st.session_state.get("inspect_show_grid")),
+            command=st.session_state.get("_live_cmd"),
+            command_id=int(st.session_state.get("_live_cmd_id", 0)),
+            height=420,
+            key="cps_live_preview_glyph",
+        )
+        svg = _cached_glyph_svg(letter, params_cache_key(inspect_params))
+        st.download_button(
+            label=f"Скачать SVG · {letter}",
+            data=svg.encode("utf-8"),
+            file_name=f"compresso_glyph_{letter}.svg",
+            mime="image/svg+xml",
+            use_container_width=True,
+        )
+
 with tab_styles:
     st.markdown("### Сохранённые начертания")
     st.caption(
-        "Выбор и удаление пресетов. Новое сохранение — в боковом меню "
-        "(имя начертания → «Сохранить текущее»). Свои пишутся в localStorage."
+        "Выбор начертания — в боковом меню. Здесь можно удалить свои пресеты "
+        "(они хранятся в localStorage браузера)."
     )
 
     all_profiles = _all_presets()
     preset_names = list(all_profiles.keys())
-    if st.session_state.get("preset_selector") not in preset_names:
-        st.session_state["preset_selector"] = "Regular"
-        st.session_state["active_preset"] = "Regular"
-
-    st.selectbox(
-        "Выбрать начертание",
-        options=preset_names,
-        key="preset_selector",
-        on_change=_on_preset_select,
-    )
-    st.caption(f"Активно: **{st.session_state.get('active_preset')}**")
 
     st.markdown("**Встроенные**")
     st.caption(", ".join(n for n in preset_names if n in BUILTIN_NAMES) or "—")

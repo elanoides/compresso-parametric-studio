@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Mapping
 
 from engine.glyphs import (
@@ -16,38 +16,37 @@ from engine.glyphs import (
     normalize_text,
     scaled_width,
 )
+from engine.module_types import MODULE_FONT, MODULE_OVAL
+from engine.render_params import RenderParams
 
 Coord = tuple[int, int]
 KerningMap = Mapping[str, float]
 
 
-@dataclass(frozen=True)
-class RenderParams:
-    """Parametric oval module settings for SVG export and preview."""
+def _module_draw():
+    """Lazy import to avoid circular dependency with ``engine.module_draw``."""
+    from engine.module_draw import font_char_map, module_svg_at
 
-    rx: float = 30.0
-    ry: float = 10.0
-    stroke_width: float = 0.0
-    fill_opacity: float = 1.0
-    step_x: float = 38.5
-    step_y: float = 16.0
-    letter_spacing: float = 1.0
-    col_scale: int = 1
-    row_scale: int = 1
-    fill: str = "#FFFFFF"
-    stroke: str = "#FFFFFF"
-    background: str = "#000000"
-    show_guides: bool = False
-    show_grid: bool = False
-    padding: float = 24.0
-    preview_scale: float = 1.0
-    # Kerning: pair "АВ" → delta in grid columns (negative = tighter).
-    kerning_pairs: tuple[tuple[str, float], ...] = ()
-    # Deformations & FX
-    slant_angle: float = 0.0  # degrees; + = classic italic (top to the right)
-    jitter_x: float = 0.0  # px amplitude of per-module X jitter
-    row_jitter: float = 0.0  # px amplitude of whole-row X shift
-    seed: int = 0
+    return font_char_map, module_svg_at
+
+
+def ellipse_effective_half_extents(rx: float, ry: float, angle_deg: float) -> tuple[float, float]:
+    """Axis-aligned half-width / half-height of a rotated ellipse."""
+    if abs(float(angle_deg)) < 1e-9:
+        return float(rx), float(ry)
+    rad = math.radians(float(angle_deg))
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    half_w = math.sqrt((rx * cos_a) ** 2 + (ry * sin_a) ** 2)
+    half_h = math.sqrt((rx * sin_a) ** 2 + (ry * cos_a) ** 2)
+    return half_w, half_h
+
+
+def module_ink_extents(p: RenderParams) -> tuple[float, float]:
+    """Effective half-width / half-height of one module including stroke."""
+    m = stroke_margin(p)
+    hw, hh = ellipse_effective_half_extents(p.rx, p.ry, p.module_angle)
+    return hw + m, hh + m
 
 
 def kerning_dict(p: RenderParams) -> dict[str, float]:
@@ -116,6 +115,38 @@ def deform_offset_x(
     return dx
 
 
+def module_center_font_units(
+    col: int,
+    row: int,
+    p: RenderParams,
+    scale: float,
+    *,
+    salt: str = "",
+) -> tuple[float, float]:
+    """Module center in font units (y↑ from baseline) with slant and jitter."""
+    cx = col * p.step_x * scale
+    cy = (BASELINE - row) * p.step_y * scale
+    dx = cy * slant_tan(p)
+    jitter_only = RenderParams(
+        slant_angle=0.0,
+        jitter_x=p.jitter_x,
+        row_jitter=p.row_jitter,
+        seed=p.seed,
+    )
+    dx += (
+        deform_offset_x(
+            col=float(col),
+            row=int(row),
+            cy=0.0,
+            y_baseline=0.0,
+            p=jitter_only,
+            salt=salt,
+        )
+        * scale
+    )
+    return cx + dx, cy
+
+
 def transformed_center(
     col: float,
     row: int,
@@ -133,20 +164,34 @@ def transformed_center(
     return cx, cy
 
 
-def ellipse_svg(cx: float, cy: float, p: RenderParams) -> str:
-    """Single horizontal oval module as an SVG ``<ellipse>`` tag."""
-    return (
-        f'<ellipse cx="{cx:.2f}" cy="{cy:.2f}" rx="{p.rx:.2f}" ry="{p.ry:.2f}" '
-        f'fill="{p.fill}" fill-opacity="{p.fill_opacity:.3f}" '
+def ellipse_svg(
+    cx: float,
+    cy: float,
+    p: RenderParams,
+    *,
+    angle: float | None = None,
+    fill_opacity: float | None = None,
+) -> str:
+    """Single oval module as SVG ``<ellipse>`` (rotation around cx, cy)."""
+    rot = float(p.module_angle if angle is None else angle)
+    fo = p.fill_opacity if fill_opacity is None else float(fill_opacity)
+    tag = (
+        f'<ellipse cx="{cx:.2f}" cy="{cy:.2f}" rx="{p.rx:.2f}" ry="{p.ry:.2f}"'
+    )
+    if abs(rot) >= 1e-9:
+        tag += f' transform="rotate({rot:.2f}, {cx:.2f}, {cy:.2f})"'
+    tag += (
+        f' fill="{p.fill}" fill-opacity="{fo:.3f}" '
         f'stroke="{p.stroke}" stroke-width="{p.stroke_width:.2f}"/>'
     )
+    return tag
 
 
 def _layout_origin(p: RenderParams) -> tuple[float, float]:
     """Top-left content origin including stroke + deformation margin."""
-    m = stroke_margin(p)
     extra = deform_pad_x(p)
-    return p.padding + p.rx + m + extra, p.padding + p.ry + m
+    hw, hh = module_ink_extents(p)
+    return p.padding + hw + extra, p.padding + hh
 
 
 def _canvas_size(
@@ -157,12 +202,12 @@ def _canvas_size(
     max_row: int = ROWS_TOTAL - 1,
 ) -> tuple[float, float, float, float]:
     """Return width, height, origin_x, origin_y for a grid span."""
-    m = stroke_margin(p)
     extra = deform_pad_x(p)
+    hw, hh = module_ink_extents(p)
     ox, oy = _layout_origin(p)
     row_span = max(max_row - min_row, 0)
-    width = p.padding * 2 + max(max_col, 0) * p.step_x + (p.rx + m) * 2 + extra * 2
-    height = p.padding * 2 + row_span * p.step_y + (p.ry + m) * 2
+    width = p.padding * 2 + max(max_col, 0) * p.step_x + hw * 2 + extra * 2
+    height = p.padding * 2 + row_span * p.step_y + hh * 2
     oy_adjusted = oy - min_row * p.step_y
     return width, height, ox, oy_adjusted
 
@@ -201,6 +246,28 @@ def _append_grid_guides(
     parts.append("</g>")
 
 
+def _append_grid_module_ghosts(
+    parts: list[str],
+    p: RenderParams,
+    ox: float,
+    oy: float,
+    cols: int,
+    min_row: int,
+    max_row: int,
+) -> None:
+    """Inactive module slots — same rotation as active ovals."""
+    if p.module_type == MODULE_FONT:
+        return
+    _, module_svg_at = _module_draw()
+    parts.append("<g>")
+    ghost_opacity = min(0.18, max(0.04, p.fill_opacity * 0.15))
+    for r in range(min_row, max_row + 1):
+        for c in range(cols):
+            cx, cy = transformed_center(c, r, p, ox, oy, min_row=min_row, salt="grid")
+            parts.append(module_svg_at(cx, cy, p, fill_opacity=ghost_opacity))
+    parts.append("</g>")
+
+
 def _append_glyph_guides(
     parts: list[str],
     p: RenderParams,
@@ -210,12 +277,12 @@ def _append_glyph_guides(
     min_row: int,
     max_row: int,
 ) -> None:
-    m = stroke_margin(p)
+    hw, hh = module_ink_extents(p)
     y_cap = oy + (BODY_TOP - min_row) * p.step_y
     y_base = oy + (BASELINE - min_row) * p.step_y
     y_body_bot = oy + (BODY_BOTTOM - min_row) * p.step_y
-    x0 = ox - p.rx - m
-    x1 = ox + max(cols - 1, 0) * p.step_x + p.rx + m
+    x0 = ox - hw
+    x1 = ox + max(cols - 1, 0) * p.step_x + hw
     parts.append(
         f'<line x1="{x0:.1f}" y1="{y_cap:.1f}" x2="{x1:.1f}" y2="{y_cap:.1f}" '
         f'stroke="#5ec8ff" stroke-width="1" stroke-dasharray="4 3"/>'
@@ -233,10 +300,10 @@ def _append_glyph_guides(
         f'font-size="11" font-family="monospace">Baseline (row {BASELINE})</text>'
     )
     parts.append(
-        f'<rect x="{x0:.1f}" y="{oy - p.ry - m:.1f}" width="{x1 - x0:.1f}" '
+        f'<rect x="{x0:.1f}" y="{oy - hh:.1f}" width="{x1 - x0:.1f}" '
         f'height="{(BODY_TOP - min_row) * p.step_y:.1f}" fill="#5ec8ff" opacity="0.06"/>'
     )
-    desc_h = max(0.0, (max_row - BODY_BOTTOM) * p.step_y + p.ry + m)
+    desc_h = max(0.0, (max_row - BODY_BOTTOM) * p.step_y + hh)
     parts.append(
         f'<rect x="{x0:.1f}" y="{y_body_bot:.1f}" width="{x1 - x0:.1f}" '
         f'height="{desc_h:.1f}" fill="#ff6b4a" opacity="0.06"/>'
@@ -268,13 +335,22 @@ def render_glyph_svg(
 
     if p.show_grid:
         _append_grid_guides(parts, p, ox, oy, cols, min_row, max_row)
+        _append_grid_module_ghosts(parts, p, ox, oy, cols, min_row, max_row)
     if p.show_guides:
         _append_glyph_guides(parts, p, ox, oy, cols, min_row, max_row)
 
+    char_map = {}
+    if p.module_type == MODULE_FONT:
+        font_char_map, module_svg_at = _module_draw()
+        char_map = font_char_map(coords, p, salt=ch)
+    else:
+        _, module_svg_at = _module_draw()
     parts.append("<g>")
     for c, r in coords:
         cx, cy = transformed_center(c, r, p, ox, oy, min_row=min_row, salt=ch)
-        parts.append(ellipse_svg(cx, cy, p))
+        parts.append(
+            module_svg_at(cx, cy, p, font_char=char_map.get((c, r)))
+        )
     parts.append("</g></svg>")
     return "\n".join(parts)
 
@@ -338,7 +414,7 @@ def render_text_svg(text: str, p: RenderParams) -> str:
     scale = max(0.05, float(p.preview_scale))
     disp_w = width * scale
     disp_h = height * scale
-    m = stroke_margin(p)
+    hw, _hh = module_ink_extents(p)
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{disp_w:.1f}" height="{disp_h:.1f}" '
@@ -348,14 +424,26 @@ def render_text_svg(text: str, p: RenderParams) -> str:
     if p.show_guides:
         y_base = oy + (BASELINE - min_row) * p.step_y
         parts.append(
-            f'<line x1="{ox - p.rx - m:.1f}" y1="{y_base:.1f}" '
-            f'x2="{ox + max_col * p.step_x + p.rx + m:.1f}" y2="{y_base:.1f}" '
+            f'<line x1="{ox - hw:.1f}" y1="{y_base:.1f}" '
+            f'x2="{ox + max_col * p.step_x + hw:.1f}" y2="{y_base:.1f}" '
             f'stroke="#ff6b4a" stroke-width="1" opacity="0.7"/>'
         )
+    glyph_coords: dict[str, list[Coord]] = {}
+    for c, r, ch in ellipses:
+        glyph_coords.setdefault(ch, []).append((int(c), r))
+    font_char_map, module_svg_at = _module_draw()
+    char_maps: dict[str, dict[Coord, str]] = {}
+    if p.module_type == MODULE_FONT:
+        for ch, coords in glyph_coords.items():
+            char_maps[ch] = font_char_map(coords, p, salt=ch)
+
     parts.append("<g>")
     for c, r, ch in ellipses:
         cx, cy = transformed_center(c, r, p, ox, oy, min_row=min_row, salt=ch)
-        parts.append(ellipse_svg(cx, cy, p))
+        fmap = char_maps.get(ch, {})
+        parts.append(
+            module_svg_at(cx, cy, p, font_char=fmap.get((int(c), r)))
+        )
     parts.append("</g></svg>")
     return "\n".join(parts)
 
@@ -384,6 +472,14 @@ def params_cache_key(p: RenderParams) -> tuple:
         p.jitter_x,
         p.row_jitter,
         p.seed,
+        p.module_angle,
+        p.module_type,
+        p.custom_svg_markup,
+        p.module_font_file,
+        p.module_font_chars,
+        p.module_font_fill_order,
+        p.module_font_randomize,
+        p.module_font_symbols_per_module,
     )
 
 
@@ -411,6 +507,14 @@ def params_from_cache_key(key: tuple) -> RenderParams:
         jitter_x=key[18] if len(key) > 18 else 0.0,
         row_jitter=key[19] if len(key) > 19 else 0.0,
         seed=int(key[20]) if len(key) > 20 else 0,
+        module_angle=float(key[21]) if len(key) > 21 else 0.0,
+        module_type=str(key[22]) if len(key) > 22 else MODULE_OVAL,
+        custom_svg_markup=str(key[23]) if len(key) > 23 else "",
+        module_font_file=str(key[24]) if len(key) > 24 else "",
+        module_font_chars=str(key[25]) if len(key) > 25 else "",
+        module_font_fill_order=str(key[26]) if len(key) > 26 else "columns",
+        module_font_randomize=bool(key[27]) if len(key) > 27 else False,
+        module_font_symbols_per_module=int(key[28]) if len(key) > 28 else 1,
     )
 
 

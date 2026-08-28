@@ -10,6 +10,7 @@ from typing import Any
 PROFILE_PARAM_KEYS: tuple[str, ...] = (
     "rx",
     "ry",
+    "module_angle",
     "stroke_width",
     "fill_opacity",
     "step_x",
@@ -24,6 +25,13 @@ PROFILE_PARAM_KEYS: tuple[str, ...] = (
     "jitter_x",
     "row_jitter",
     "seed",
+    "module_type",
+    "custom_svg_markup",
+    "module_font_file",
+    "module_font_chars",
+    "module_font_fill_order",
+    "module_font_randomize",
+    "module_font_symbols_per_module",
     "font_size",
     "kerning_pairs",
 )
@@ -35,6 +43,7 @@ GEOMETRY_KEYS: tuple[str, ...] = tuple(k for k in PROFILE_PARAM_KEYS if k not in
 BASE_REGULAR: dict[str, Any] = {
     "rx": 30.0,
     "ry": 10.0,
+    "module_angle": 0.0,
     "stroke_width": 0.0,
     "fill_opacity": 1.0,
     "step_x": 38.5,
@@ -49,6 +58,13 @@ BASE_REGULAR: dict[str, Any] = {
     "jitter_x": 0.0,
     "row_jitter": 0.0,
     "seed": 0,
+    "module_type": "oval",
+    "custom_svg_markup": "",
+    "module_font_file": "",
+    "module_font_chars": "",
+    "module_font_fill_order": "columns",
+    "module_font_randomize": False,
+    "module_font_symbols_per_module": 1,
     "font_size": 0.38,
     "kerning_pairs": {},
 }
@@ -92,6 +108,13 @@ BUILTIN_PRESETS: dict[str, dict[str, Any]] = {
         "seed": 42,
         "stroke_width": 0.4,
         "fill_opacity": 0.95,
+    },
+    "Diagonal 45° (CRT Diamond)": {
+        **BASE_REGULAR,
+        "module_angle": 45.0,
+        "step_x": 36.0,
+        "step_y": 15.0,
+        "letter_spacing": 1.0,
     },
 }
 

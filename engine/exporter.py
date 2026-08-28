@@ -9,7 +9,15 @@ from io import BytesIO
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 
-from engine.geometry import RenderParams, deform_offset_x, render_glyph_svg, render_text_svg, slant_tan
+from engine.geometry import (
+    RenderParams,
+    ellipse_effective_half_extents,
+    module_center_font_units,
+    render_glyph_svg,
+    render_text_svg,
+    slant_tan,
+)
+from engine.module_ttf import build_glyph_outline
 from engine.glyphs import (
     BASELINE,
     BODY_TOP,
@@ -21,7 +29,6 @@ from engine.glyphs import (
 )
 from engine.presets import safe_folder_name
 
-ELLIPSE_SEGMENTS = 28
 FAMILY = "Compresso Parametric"
 DEFAULT_STYLE = "Regular"
 
@@ -136,24 +143,6 @@ def resolve_style_metrics(style: str) -> tuple[int, int, int]:
     return weight, width, fs_selection
 
 
-def _ellipse_points(
-    cx: float, cy: float, rx: float, ry: float, n: int
-) -> list[tuple[float, float]]:
-    pts: list[tuple[float, float]] = []
-    for i in range(n):
-        a = 2.0 * math.pi * i / n
-        pts.append((cx + rx * math.cos(a), cy + ry * math.sin(a)))
-    return pts
-
-
-def _draw_ellipse(pen: TTGlyphPen, cx: float, cy: float, rx: float, ry: float) -> None:
-    pts = _ellipse_points(cx, cy, rx, ry, ELLIPSE_SEGMENTS)
-    pen.moveTo(pts[0])
-    for point in pts[1:]:
-        pen.lineTo(point)
-    pen.closePath()
-
-
 def _kern_delta_fu(delta_cols: float, p: RenderParams, scale: float) -> int:
     """Convert studio kerning (column units) to font units."""
     return int(round(float(delta_cols) * p.step_x * scale))
@@ -245,46 +234,20 @@ def _glyph_metrics(
 
     rx = p.rx * scale
     ry = p.ry * scale
+    hw, hh = ellipse_effective_half_extents(rx, ry, p.module_angle)
     xs: list[float] = []
     ys: list[float] = []
     for c, r in coords:
-        cx, cy = _transformed_font_xy(c, r, p, scale, salt=ch)
-        xs.extend((cx - rx, cx + rx))
-        ys.extend((cy - ry, cy + ry))
+        cx, cy = module_center_font_units(c, r, p, scale, salt=ch)
+        xs.extend((cx - hw, cx + hw))
+        ys.extend((cy - hh, cy + hh))
 
     xmin = int(math.floor(min(xs)))
     xmax = int(math.ceil(max(xs)))
     ymin = int(math.floor(min(ys)))
     ymax = int(math.ceil(max(ys)))
-    advance = max(advance, xmax + int(math.ceil(rx)), 1)
+    advance = max(advance, xmax + int(math.ceil(hw)), 1)
     return advance, xmin, ymin, xmax, ymax
-
-
-def _transformed_font_xy(
-    c: int, r: int, p: RenderParams, scale: float, *, salt: str
-) -> tuple[float, float]:
-    """Module center in font units (y up from baseline) with deformations."""
-    cx = c * p.step_x * scale
-    cy = (BASELINE - r) * p.step_y * scale
-    dx = cy * slant_tan(p)
-    jitter_only = RenderParams(
-        slant_angle=0.0,
-        jitter_x=p.jitter_x,
-        row_jitter=p.row_jitter,
-        seed=p.seed,
-    )
-    dx += (
-        deform_offset_x(
-            col=float(c),
-            row=int(r),
-            cy=0.0,
-            y_baseline=0.0,
-            p=jitter_only,
-            salt=salt,
-        )
-        * scale
-    )
-    return cx + dx, cy
 
 
 def build_ttf_bytes(
@@ -293,7 +256,7 @@ def build_ttf_bytes(
     family: str = FAMILY,
     style: str = DEFAULT_STYLE,
 ) -> bytes:
-    """Compile all studio glyphs into a TTF binary with current oval params."""
+    """Compile all studio glyphs into a TTF binary (oval / custom SVG / font modules)."""
     style_name = normalize_style_name(style)
     family_name = (family or FAMILY).strip() or FAMILY
     cap_span = max((BASELINE - BODY_TOP) * p.step_y, 1.0)
@@ -333,12 +296,7 @@ def build_ttf_bytes(
         gname = name_by_char[ch]
         pen = TTGlyphPen(None)
         coords = get_glyph(ch, p.col_scale, p.row_scale)
-        rx = p.rx * scale
-        ry = p.ry * scale
-        for c, r in coords:
-            cx, cy = _transformed_font_xy(c, r, p, scale, salt=ch)
-            _draw_ellipse(pen, cx, cy, rx, ry)
-        glyphs[gname] = pen.glyph()
+        glyphs[gname] = build_glyph_outline(ch, coords, p, scale)
         advance, xmin, ymin, xmax, ymax = _glyph_metrics(ch, p, scale)
         metrics[gname] = (advance, xmin)
         all_ymin = min(all_ymin, ymin)
@@ -430,6 +388,7 @@ def build_glyphs_json(
             "letter_spacing": p.letter_spacing,
             "col_scale": p.col_scale,
             "row_scale": p.row_scale,
+            "module_angle": p.module_angle,
             "slant_angle": p.slant_angle,
             "jitter_x": p.jitter_x,
             "row_jitter": p.row_jitter,
@@ -471,6 +430,13 @@ def profile_to_render_params(profile: dict, *, preview_scale: float = 1.0) -> Re
         jitter_x=float(profile.get("jitter_x", 0.0)),
         row_jitter=float(profile.get("row_jitter", 0.0)),
         seed=int(profile.get("seed", 0)),
+        module_angle=float(profile.get("module_angle", 0.0)),
+        module_type=str(profile.get("module_type", "oval")),
+        custom_svg_markup=str(profile.get("custom_svg_markup") or ""),
+        module_font_file=str(profile.get("module_font_file") or ""),
+        module_font_chars=str(profile.get("module_font_chars") or ""),
+        module_font_fill_order=str(profile.get("module_font_fill_order") or "columns"),
+        module_font_randomize=bool(profile.get("module_font_randomize", False)),
     )
 
 

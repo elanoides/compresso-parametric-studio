@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>cps-live-studio</title>
+    <style>
+      :root {
+        --bg: #000;
+        --panel: #161616;
+        --border: #2a2a2a;
+        --text: #fff;
+        --muted: #9a9a9a;
+        --accent: #fff;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", system-ui, sans-serif;
+        font-size: 13px;
+      }
+      .studio {
+        display: flex;
+        gap: 12px;
+        min-height: 480px;
+        padding: 8px;
+      }
+      .controls {
+        width: 300px;
+        flex-shrink: 0;
+        max-height: 680px;
+        overflow-y: auto;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+      .controls h3 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      .controls section { margin-bottom: 14px; }
+      .field { margin-bottom: 10px; }
+      .field label {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .field label span.val { color: var(--text); font-variant-numeric: tabular-nums; }
+      input[type="range"] {
+        width: 100%;
+        accent-color: #fff;
+      }
+      input[type="number"] {
+        width: 100%;
+        background: #0c0c0c;
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        padding: 4px 6px;
+      }
+      .quick-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 4px;
+        margin-bottom: 8px;
+      }
+      .quick-row button, .sync-btn, .mode-row button {
+        background: #222;
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 4px;
+        padding: 6px 4px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .quick-row button:hover, .sync-btn:hover, .mode-row button:hover {
+        border-color: #fff;
+      }
+      .mode-row { display: flex; gap: 6px; margin-bottom: 10px; }
+      .mode-row button.active { background: #333; border-color: #fff; font-weight: 600; }
+      .preview-wrap {
+        flex: 1;
+        min-width: 0;
+        background: #000;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: auto;
+        padding: 12px;
+      }
+      .preview-wrap svg { display: block; max-width: 100%; height: auto; }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .sync-btn { flex: 1; font-weight: 600; }
+      .hint { color: var(--muted); font-size: 11px; line-height: 1.35; margin: 0 0 8px; }
+      .studio.preview-only { padding: 0; min-height: auto; gap: 0; }
+      .studio.preview-only .controls { display: none !important; }
+      .studio.preview-only .preview-wrap {
+        min-height: 480px;
+        border-radius: 0.4rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="studio" id="studio">
+      <div class="controls" id="controls">
+        <div class="toolbar">
+          <button type="button" class="sync-btn" id="syncBtn">↻ В Studio</button>
+        </div>
+        <p class="hint">Превью обновляется мгновенно при движении ползунков. «В Studio» — синхронизация с Python для экспорта.</p>
+        <div class="mode-row">
+          <button type="button" data-mode="text" id="modeText">Фраза</button>
+          <button type="button" data-mode="glyph" id="modeGlyph">Глиф</button>
+        </div>
+        <section>
+          <h3>Module Geometry</h3>
+          <div class="field">
+            <label>Module Angle (°) <span class="val" data-for="module_angle"></span></label>
+            <input type="range" name="module_angle" min="-90" max="90" step="1" />
+          </div>
+          <div class="quick-row">
+            <button type="button" data-angle="0">0°</button>
+            <button type="button" data-angle="45">45°</button>
+            <button type="button" data-angle="-45">-45°</button>
+            <button type="button" data-angle="90">90°</button>
+          </div>
+          <div class="field">
+            <label>Radius X (rx) <span class="val" data-for="rx"></span></label>
+            <input type="range" name="rx" min="1" max="90" step="0.5" />
+          </div>
+          <div class="field">
+            <label>Radius Y (ry) <span class="val" data-for="ry"></span></label>
+            <input type="range" name="ry" min="0.5" max="200" step="0.5" />
+          </div>
+          <div class="field">
+            <label>Stroke width <span class="val" data-for="stroke_width"></span></label>
+            <input type="range" name="stroke_width" min="0" max="6" step="0.1" />
+          </div>
+          <div class="field">
+            <label>Fill opacity <span class="val" data-for="fill_opacity"></span></label>
+            <input type="range" name="fill_opacity" min="0" max="1" step="0.05" />
+          </div>
+        </section>
+        <section>
+          <h3>Spacing &amp; density</h3>
+          <div class="field">
+            <label>Grid step X <span class="val" data-for="step_x"></span></label>
+            <input type="range" name="step_x" min="2" max="60" step="0.5" />
+          </div>
+          <div class="field">
+            <label>Grid step Y <span class="val" data-for="step_y"></span></label>
+            <input type="range" name="step_y" min="1" max="40" step="0.5" />
+          </div>
+          <div class="field">
+            <label>Matrix columns × <span class="val" data-for="col_scale"></span></label>
+            <input type="range" name="col_scale" min="1" max="3" step="1" />
+          </div>
+          <div class="field">
+            <label>Matrix rows × <span class="val" data-for="row_scale"></span></label>
+            <input type="range" name="row_scale" min="1" max="3" step="1" />
+          </div>
+          <div class="field">
+            <label>Letter spacing <span class="val" data-for="letter_spacing"></span></label>
+            <input type="range" name="letter_spacing" min="0" max="6" step="0.5" />
+          </div>
+        </section>
+        <section>
+          <h3>Deformations &amp; FX</h3>
+          <div class="field">
+            <label>Slant / Skew (°) <span class="val" data-for="slant_angle"></span></label>
+            <input type="range" name="slant_angle" min="-30" max="30" step="0.5" />
+          </div>
+          <div class="field">
+            <label>Glitch (X Jitter) <span class="val" data-for="jitter_x"></span></label>
+            <input type="range" name="jitter_x" min="0" max="50" step="0.5" />
+          </div>
+          <div class="field">
+            <label>Row Jitter <span class="val" data-for="row_jitter"></span></label>
+            <input type="range" name="row_jitter" min="0" max="50" step="0.5" />
+          </div>
+          <div class="field">
+            <label>Seed</label>
+            <input type="number" name="seed" min="0" max="999999" step="1" />
+          </div>
+        </section>
+        <section id="previewScaleSection">
+          <h3>Preview scale</h3>
+          <div class="field">
+            <label>Размер (фраза) <span class="val" data-for="preview_scale"></span></label>
+            <input type="range" name="preview_scale" min="0.15" max="1" step="0.01" />
+          </div>
+        </section>
+      </div>
+      <div class="preview-wrap" id="preview"></div>
+    </div>
+    <script>
+      /* eslint-disable */
+      (function () {
+        const SHA256 = (function () {
+          function rotr(n, x) { return (x >>> n) | (x << (32 - n)); }
+          function ch(x, y, z) { return (x & y) ^ (~x & z); }
+          function maj(x, y, z) { return (x & y) ^ (x & z) ^ (y & z); }
+          function sigma0(x) { return rotr(2, x) ^ rotr(13, x) ^ rotr(22, x); }
+          function sigma1(x) { return rotr(6, x) ^ rotr(11, x) ^ rotr(25, x); }
+          function gamma0(x) { return rotr(7, x) ^ rotr(18, x) ^ (x >>> 3); }
+          function gamma1(x) { return rotr(17, x) ^ rotr(19, x) ^ (x >>> 10); }
+          const K = new Uint32Array([
+            0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+            0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+            0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+            0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+            0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+            0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+            0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+            0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+          ]);
+          return function sha256(ascii) {
+            const mathPow = Math.pow;
+            const maxWord = mathPow(2, 32);
+            let i, j;
+            let result = "";
+            const words = [];
+            const asciiBitLength = ascii.length * 8;
+            let hash = [];
+            const k = K;
+            let primeCounter = 0;
+            const isComposite = {};
+            for (let i2 = 2; primeCounter < 64; i2++) {
+              if (!isComposite[i2]) {
+                for (j = 0; j < 313; j += i2) isComposite[j] = i2;
+                hash[primeCounter] = (mathPow(i2, 0.5) * maxWord) | 0;
+                primeCounter++;
+              }
+            }
+            ascii += "\x80";
+            while (ascii.length % 64 - 56) ascii += "\x00";
+            for (i = 0; i < ascii.length; i++) {
+              j = ascii.charCodeAt(i);
+              if (j >> 8) return;
+              words[i >> 2] |= j << ((3 - i) % 4) * 8;
+            }
+            words[words.length] = (asciiBitLength / maxWord) | 0;
+            words[words.length] = asciiBitLength;
+            for (j = 0; j < words.length;) {
+              const w = words.slice(j, (j += 16));
+              const oldHash = hash.slice(0);
+              for (i = 0; i < 64; i++) {
+                const w15 = w[i - 15], w2 = w[i - 2];
+                w[i] =
+                  i < 16
+                    ? w[i]
+                    : (w[i - 16] + gamma0(w15) + w[i - 7] + gamma1(w2)) | 0;
+                const a = hash[0], e = hash[4];
+                const t1 =
+                  (hash[7] + sigma1(e) + ch(e, hash[5], hash[6]) + k[i] + w[i]) | 0;
+                const t2 = (sigma0(a) + maj(a, hash[1], hash[2])) | 0;
+                hash = [(t1 + t2) | 0].concat(hash);
+                hash[4] = (hash[4] + t1) | 0;
+                hash.pop();
+              }
+              for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+            }
+            for (i = 0; i < 8; i++) {
+              for (j = 3; j + 1; j--) {
+                const b = (hash[i] >> (j * 8)) & 255;
+                result += (b < 16 ? "0" : "") + b.toString(16);
+              }
+            }
+            return result;
+          };
+        })();
+
+        function stableUnit(seed) {
+          const parts = Array.prototype.slice.call(arguments, 1);
+          const material = [String(seed)].concat(parts.map(String)).join("|");
+          const hex = SHA256(material);
+          const n = parseInt(hex.substring(0, 16), 16) / Math.pow(2, 64);
+          return n * 2 - 1;
+        }
+
+        function post(type, payload) {
+          window.parent.postMessage(
+            Object.assign({ isStreamlitMessage: true, type: type }, payload || {}),
+            "*"
+          );
+        }
+        function setReady(h) {
+          post("streamlit:componentReady", { apiVersion: 1 });
+          post("streamlit:setFrameHeight", { height: h || 720 });
+        }
+        function setValue(value) {
+          post("streamlit:setComponentValue", { value: value, dataType: "json" });
+        }
+
+        let PACK = null;
+        let C = {};
+        let state = {
+          previewOnly: false,
+          mode: "text",
+          text: "",
+          defaultText: "",
+          glyph: "А",
+          defaultGlyph: "А",
+          show_guides: false,
+          show_grid: false,
+          preview_scale: 0.38,
+          params: {},
+          kerning_pairs: {},
+        };
+        let renderQueued = false;
+        let lastCommandId = -1;
+        let parentBridgeBound = false;
+
+        const DEFORM_SLIDER_KEYS = { jitter_x: true, row_jitter: true, slant_angle: true, module_angle: true };
+        const SLIDER_LABELS = {
+          "Module Angle (°)": "module_angle",
+          "Radius X (rx)": "rx",
+          "Radius Y (ry)": "ry",
+          "Высота ячейки (ry)": "ry",
+          "Stroke width": "stroke_width",
+          "Fill opacity": "fill_opacity",
+          "Grid step X": "step_x",
+          "Grid step Y (overlap OK)": "step_y",
+          "Matrix columns ×": "col_scale",
+          "Matrix rows ×": "row_scale",
+          "Letter spacing (cols)": "letter_spacing",
+          "Slant / Skew (°)": "slant_angle",
+          "Glitch (X Jitter)": "jitter_x",
+          "Row Jitter (Scanline Shift)": "row_jitter",
+          "Размер шрифта (превью)": "preview_scale",
+          "Сдвиг (cols)": "_kern_delta",
+        };
+
+        function resolveSliderKey(label, wrap) {
+          if (SLIDER_LABELS[label]) return SLIDER_LABELS[label];
+          for (const text in SLIDER_LABELS) {
+            if (SLIDER_LABELS.hasOwnProperty(text) && label.indexOf(text) === 0) {
+              return SLIDER_LABELS[text];
+            }
+          }
+          const wrapText = wrap ? (wrap.innerText || "").split("\n")[0].trim() : "";
+          if (SLIDER_LABELS[wrapText]) return SLIDER_LABELS[wrapText];
+          for (const text in SLIDER_LABELS) {
+            if (SLIDER_LABELS.hasOwnProperty(text) && wrapText.indexOf(text) >= 0) {
+              return SLIDER_LABELS[text];
+            }
+          }
+          return null;
+        }
+
+        const DEFAULTS = {
+          rx: 30, ry: 10, stroke_width: 0, fill_opacity: 1,
+          step_x: 38.5, step_y: 16, col_scale: 1, row_scale: 1, letter_spacing: 1,
+          fill: "#FFFFFF", stroke: "#FFFFFF", background: "#000000",
+          slant_angle: 0, jitter_x: 0, row_jitter: 0, seed: 0, module_angle: 0,
+          module_type: "oval", custom_svg_markup: "", module_font_file: "",
+          module_font_chars: "", module_font_fill_order: "columns", module_font_randomize: false,
+          module_font_symbols_per_module: 1,
+          font_paths: {}, font_alphabet: "",
+          padding: 24,
+        };
+
+        const MODULE_OVAL = "oval";
+        const MODULE_CUSTOM_SVG = "custom_svg";
+        const MODULE_FONT = "font_symbols";
+        const RANDOM_EXCLUDED = "O0QОo.°,;·•●◦∙";
+
+        function p() {
+          return Object.assign({}, DEFAULTS, state.params);
+        }
+
+        function strokeMargin(pr) { return pr.stroke_width / 2; }
+        function slantTan(pr) { return Math.tan((pr.slant_angle * Math.PI) / 180); }
+        function ellipseHalfExtents(rx, ry, angleDeg) {
+          if (Math.abs(angleDeg) < 1e-9) return [rx, ry];
+          const rad = (angleDeg * Math.PI) / 180;
+          const cosA = Math.cos(rad), sinA = Math.sin(rad);
+          const hw = Math.sqrt(Math.pow(rx * cosA, 2) + Math.pow(ry * sinA, 2));
+          const hh = Math.sqrt(Math.pow(rx * sinA, 2) + Math.pow(ry * cosA, 2));
+          return [hw, hh];
+        }
+        function moduleInkExtents(pr) {
+          const m = strokeMargin(pr);
+          const [hw, hh] = ellipseHalfExtents(pr.rx, pr.ry, pr.module_angle);
+          return [hw + m, hh + m];
+        }
+        function deformPadX(pr) {
+          const maxAbove = C.BASELINE * pr.step_y + pr.ry;
+          const maxBelow = (C.ROWS_TOTAL - 1 - C.BASELINE) * pr.step_y + pr.ry;
+          return Math.abs(slantTan(pr)) * Math.max(maxAbove, maxBelow) + Math.abs(pr.jitter_x) + Math.abs(pr.row_jitter);
+        }
+        function deformOffsetX(col, row, cy, yBaseline, pr, salt) {
+          let dx = (yBaseline - cy) * slantTan(pr);
+          const colQ = Math.round(col * 1e4) / 1e4;
+          if (pr.jitter_x) dx += pr.jitter_x * stableUnit(pr.seed, "jx", salt, colQ, row);
+          if (pr.row_jitter) dx += pr.row_jitter * stableUnit(pr.seed, "row", row);
+          return dx;
+        }
+        function transformedCenter(col, row, pr, ox, oy, minRow, salt) {
+          const cx = ox + col * pr.step_x;
+          const cy = oy + (row - minRow) * pr.step_y;
+          const yBase = oy + (C.BASELINE - minRow) * pr.step_y;
+          return [cx + deformOffsetX(col, row, cy, yBase, pr, salt), cy];
+        }
+        function ellipseSvg(cx, cy, pr, fillOpacity) {
+          const fo = fillOpacity == null ? pr.fill_opacity : fillOpacity;
+          let tag = `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${pr.rx.toFixed(2)}" ry="${pr.ry.toFixed(2)}"`;
+          if (Math.abs(pr.module_angle) >= 1e-9) {
+            tag += ` transform="rotate(${pr.module_angle.toFixed(2)}, ${cx.toFixed(2)}, ${cy.toFixed(2)})"`;
+          }
+          tag += ` fill="${pr.fill}" fill-opacity="${fo.toFixed(3)}" stroke="${pr.stroke}" stroke-width="${pr.stroke_width.toFixed(2)}"/>`;
+          return tag;
+        }
+        function customSvgBBox(inner) {
+          const xs = [], ys = [];
+          const pathRe = /d=["']([^"']+)["']/g;
+          let m;
+          while ((m = pathRe.exec(inner))) {
+            const nums = m[1].match(/-?\d+\.?\d*/g);
+            if (!nums || nums.length < 2) continue;
+            for (let i = 0; i + 1 < nums.length; i += 2) {
+              xs.push(parseFloat(nums[i]));
+              ys.push(parseFloat(nums[i + 1]));
+            }
+          }
+          const circleRe = /cx=["']([^"']+)["']\s+cy=["']([^"']+)["']\s+r=["']([^"']+)["']/g;
+          while ((m = circleRe.exec(inner))) {
+            const cx = parseFloat(m[1]), cy = parseFloat(m[2]), r = parseFloat(m[3]);
+            xs.push(cx - r, cx + r);
+            ys.push(cy - r, cy + r);
+          }
+          const ellipseRe = /cx=["']([^"']+)["']\s+cy=["']([^"']+)["']\s+rx=["']([^"']+)["']\s+ry=["']([^"']+)["']/g;
+          while ((m = ellipseRe.exec(inner))) {
+            const cx = parseFloat(m[1]), cy = parseFloat(m[2]), rx = parseFloat(m[3]), ry = parseFloat(m[4]);
+            xs.push(cx - rx, cx + rx);
+            ys.push(cy - ry, cy + ry);
+          }
+          const rectRe = /x=["']([^"']+)["']\s+y=["']([^"']+)["']\s+width=["']([^"']+)["']\s+height=["']([^"']+)["']/g;
+          while ((m = rectRe.exec(inner))) {
+            const x = parseFloat(m[1]), y = parseFloat(m[2]), w = parseFloat(m[3]), h = parseFloat(m[4]);
+            xs.push(x, x + w);
+            ys.push(y, y + h);
+          }
+          if (!xs.length) return [-1, -1, 1, 1];
+          return [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)];
+        }
+        function normalizeCustomSvgStamp(inner, rx, ry) {
+          const bb = customSvgBBox(inner);
+          const w = Math.max(bb[2] - bb[0], 1e-6);
+          const h = Math.max(bb[3] - bb[1], 1e-6);
+          const cx = (bb[0] + bb[2]) / 2;
+          const cy = (bb[1] + bb[3]) / 2;
+          const uniform = Math.min((2 * rx) / w, (2 * ry) / h);
+          return `<g transform="translate(${(-cx).toFixed(4)},${(-cy).toFixed(4)}) scale(${uniform.toFixed(6)})">${inner}</g>`;
+        }
+        function stableCharIndex(seed, salt, n) {
+          if (n <= 0) return 0;
+          const mat = seed + "|" + salt;
+          let h = 2166136261;
+          for (let i = 0; i < mat.length; i++) {
+            h ^= mat.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+          }
+          return (h >>> 0) % n;
+        }
+        function sortCoords(coords, fillOrder) {
+          const copy = coords.slice();
+          if (fillOrder === "rows") {
+            copy.sort(function (a, b) { return a[1] - b[1] || a[0] - b[0]; });
+          } else {
+            copy.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+          }
+          return copy;
+        }
+        function buildCharPool(pr) {
+          const raw = (pr.module_font_chars || "").trim();
+          if (raw) return raw.replace(/\s+/g, "").toUpperCase();
+          if (pr.font_alphabet) return pr.font_alphabet;
+          return "A";
+        }
+        function drawableCharPool(pool, pr) {
+          if (!pool) return "A";
+          let out = "";
+          for (let i = 0; i < pool.length; i++) {
+            const ch = pool[i];
+            if (RANDOM_EXCLUDED.indexOf(ch) >= 0) continue;
+            if (pr.font_paths && !pr.font_paths[ch]) continue;
+            out += ch;
+          }
+          if (out) return out;
+          for (let j = 0; j < pool.length; j++) {
+            if (pr.font_paths && pr.font_paths[pool[j]]) return pool[j];
+          }
+          return "A";
+        }
+        function symbolsPerModule(pr) {
+          return Math.max(1, Math.round(pr.module_font_symbols_per_module || 1));
+        }
+        function fontUniformScale(pr, count) {
+          const m = strokeMargin(pr);
+          const n = Math.max(1, count || 1);
+          return Math.max(pr.ry - m, 0.5) / n;
+        }
+        function symbolYOffset(index, count, ry) {
+          if (count <= 1) return 0;
+          const strip = (2 * ry) / count;
+          return (index - (count - 1) / 2) * strip;
+        }
+        function fontCharMap(coords, pr, salt) {
+          const ordered = sortCoords(coords, pr.module_font_fill_order || "columns");
+          let pool = buildCharPool(pr);
+          if (!pool) pool = "A";
+          pool = drawableCharPool(pool, pr);
+          const perModule = symbolsPerModule(pr);
+          const out = {};
+          let seq = 0;
+          ordered.forEach(function (pt) {
+            const chars = [];
+            for (let slot = 0; slot < perModule; slot++) {
+              let ch;
+              if (pr.module_font_randomize) {
+                let attempts = 0;
+                while (attempts < pool.length) {
+                  ch = pool[stableCharIndex(
+                    pr.seed,
+                    salt + ":" + pt[0] + ":" + pt[1] + ":" + slot + ":" + attempts,
+                    pool.length
+                  )];
+                  if (pr.font_paths && pr.font_paths[ch]) break;
+                  attempts += 1;
+                }
+                if (!pr.font_paths || !pr.font_paths[ch]) continue;
+              } else {
+                ch = pool[seq % pool.length];
+                seq += 1;
+                if (!pr.font_paths || !pr.font_paths[ch]) continue;
+              }
+              chars.push(ch);
+            }
+            if (chars.length) out[pt[0] + "," + pt[1]] = chars;
+          });
+          return out;
+        }
+        function fontPathsSvg(cx, cy, pr, chars, fillOpacity, rot) {
+          const fo = fillOpacity == null ? pr.fill_opacity : fillOpacity;
+          const count = chars.length;
+          const uniform = fontUniformScale(pr, count);
+          const rotAttr = Math.abs(rot) >= 1e-9
+            ? ` transform="rotate(${rot.toFixed(2)}, ${cx.toFixed(2)}, ${cy.toFixed(2)})"` : "";
+          const parts = ["<g" + rotAttr + ">"];
+          chars.forEach(function (ch, i) {
+            if (!pr.font_paths || !pr.font_paths[ch]) return;
+            const dy = symbolYOffset(i, count, pr.ry);
+            const pathD = pr.font_paths[ch];
+            parts.push(
+              `<g transform="translate(${cx.toFixed(2)},${(cy + dy).toFixed(2)}) scale(${uniform.toFixed(4)},${(-uniform).toFixed(4)})">` +
+              `<path d="${pathD}" fill="${pr.fill}" fill-opacity="${fo.toFixed(3)}" stroke="${pr.stroke}" stroke-width="${pr.stroke_width.toFixed(2)}"/>` +
+              "</g>"
+            );
+          });
+          parts.push("</g>");
+          return parts.join("");
+        }
+        function moduleSvgAt(cx, cy, pr, fillOpacity, fontChar) {
+          const fo = fillOpacity == null ? pr.fill_opacity : fillOpacity;
+          const rot = pr.module_angle || 0;
+          const mt = pr.module_type || MODULE_OVAL;
+          if (mt === MODULE_OVAL) {
+            return ellipseSvg(cx, cy, pr, fo);
+          }
+          if (mt === MODULE_CUSTOM_SVG) {
+            const inner = (pr.custom_svg_markup || "").trim();
+            if (!inner) return "";
+            const stamp = normalizeCustomSvgStamp(inner, pr.rx, pr.ry);
+            const rotAttr = Math.abs(rot) >= 1e-9
+              ? ` transform="rotate(${rot.toFixed(2)}, ${cx.toFixed(2)}, ${cy.toFixed(2)})"` : "";
+            return `<g${rotAttr}><g transform="translate(${cx.toFixed(2)},${cy.toFixed(2)})" fill="${pr.fill}" stroke="${pr.stroke}" stroke-width="${pr.stroke_width.toFixed(2)}" fill-opacity="${fo.toFixed(3)}" color="${pr.fill}">${stamp}</g></g>`;
+          }
+          if (mt === MODULE_FONT) {
+            if (!fontChar || !pr.font_paths) return "";
+            const chars = Array.isArray(fontChar) ? fontChar : [fontChar];
+            const drawable = chars.filter(function (ch) { return pr.font_paths[ch]; });
+            if (!drawable.length) return "";
+            return fontPathsSvg(cx, cy, pr, drawable, fo, rot);
+          }
+          return "";
+        }
+        function canvasSize(pr, maxCol, minRow, maxRow) {
+          const extra = deformPadX(pr);
+          const [hw, hh] = moduleInkExtents(pr);
+          const ox = pr.padding + hw + extra;
+          const oy = pr.padding + hh;
+          const rowSpan = Math.max(maxRow - minRow, 0);
+          const width = pr.padding * 2 + Math.max(maxCol, 0) * pr.step_x + hw * 2 + extra * 2;
+          const height = pr.padding * 2 + rowSpan * pr.step_y + hh * 2;
+          return [width, height, ox, oy - minRow * pr.step_y];
+        }
+        function glyphWidth(ch) {
+          if (ch === " " || ch === "") return C.SPACE_WIDTH_COLS;
+          if (PACK.widths[ch]) return Math.max(1, PACK.widths[ch]);
+          const pts = PACK.glyphs[ch] || [];
+          if (!pts.length) return C.SPACE_WIDTH_COLS;
+          return Math.max.apply(null, pts.map(function (pt) { return pt[0]; })) + 1;
+        }
+        function scaleGlyphDensity(coords, colScale, rowScale) {
+          if (colScale <= 1 && rowScale <= 1) return coords.slice();
+          const out = {};
+          coords.forEach(function (pt) {
+            const c = pt[0], r = pt[1];
+            for (let dr = 0; dr < rowScale; dr++) {
+              for (let dc = 0; dc < colScale; dc++) {
+                out[c * colScale + dc + "," + (r * rowScale + dr)] = [c * colScale + dc, r * rowScale + dr];
+              }
+            }
+          });
+          let list = Object.keys(out).map(function (k) { return out[k]; });
+          if (rowScale > 1) {
+            const maxR = C.ROWS_TOTAL * rowScale - 1;
+            const squashed = {};
+            list.forEach(function (pt) {
+              const nc = pt[0];
+              const nr = Math.round(pt[1] * (C.ROWS_TOTAL - 1) / maxR);
+              squashed[nc + "," + nr] = [nc, nr];
+            });
+            list = Object.keys(squashed).map(function (k) { return squashed[k]; });
+          }
+          list.sort(function (a, b) { return a[1] - b[1] || a[0] - b[0]; });
+          return list;
+        }
+        function getGlyph(ch, colScale, rowScale) {
+          const base = PACK.glyphs[ch];
+          if (!base || !base.length) return [];
+          if (colScale <= 1 && rowScale <= 1) return base;
+          return scaleGlyphDensity(base, colScale, rowScale);
+        }
+        function scaledWidth(ch, colScale) {
+          return glyphWidth(ch) * Math.max(1, colScale);
+        }
+        function normalizeText(text) {
+          const out = [];
+          for (let i = 0; i < text.length; i++) {
+            let ch = text[i];
+            if (" \t".indexOf(ch) >= 0) { out.push(" "); continue; }
+            if ("\n\r\v\f".indexOf(ch) >= 0) continue;
+            if (ch === "ё" || ch === "Ё") ch = "Ё";
+            else ch = ch.toUpperCase();
+            if (PACK.glyphs[ch]) out.push(ch);
+            else out.push("");
+          }
+          return out;
+        }
+        function advanceFor(ch, pr) {
+          if (ch === " " || ch === "") return C.SPACE_WIDTH_COLS * Math.max(1, pr.col_scale) + pr.letter_spacing;
+          return scaledWidth(ch, pr.col_scale) + pr.letter_spacing;
+        }
+        function layoutText(text, pr, kern) {
+          const ellipses = [];
+          let maxCol = 0, minRow = C.ROWS_TOTAL - 1, maxRow = 0, cursor = 0, prev = null;
+          normalizeText(text).forEach(function (ch) {
+            if (prev && ch !== " " && ch !== "" && prev !== " " && prev !== "") {
+              cursor += kern[prev + ch] || 0;
+            }
+            const coords = getGlyph(ch, pr.col_scale, pr.row_scale);
+            if (ch === " " || ch === "" || !coords.length) {
+              cursor += advanceFor(ch, pr);
+              prev = ch;
+              return;
+            }
+            coords.forEach(function (pt) {
+              const absC = cursor + pt[0];
+              maxCol = Math.max(maxCol, absC);
+              minRow = Math.min(minRow, pt[1]);
+              maxRow = Math.max(maxRow, pt[1]);
+              ellipses.push([absC, pt[1], ch]);
+            });
+            cursor += advanceFor(ch, pr);
+            prev = ch;
+          });
+          if (cursor > 0) maxCol = Math.max(maxCol, cursor - pr.letter_spacing - 1);
+          if (!ellipses.length) { minRow = 0; maxRow = C.ROWS_TOTAL - 1; }
+          else { minRow = Math.min(minRow, 0); maxRow = Math.max(maxRow, C.ROWS_TOTAL - 1); }
+          return [ellipses, maxCol, minRow, maxRow];
+        }
+        function appendGridGuides(parts, pr, ox, oy, cols, minRow, maxRow) {
+          parts.push('<g opacity="0.25">');
+          for (let r = minRow; r <= maxRow; r++) {
+            const y = oy + (r - minRow) * pr.step_y;
+            parts.push(`<line x1="${ox.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(ox + Math.max(cols - 1, 0) * pr.step_x).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#4a6a4a" stroke-width="0.5"/>`);
+          }
+          for (let c = 0; c < cols; c++) {
+            const x = ox + c * pr.step_x;
+            parts.push(`<line x1="${x.toFixed(1)}" y1="${oy.toFixed(1)}" x2="${x.toFixed(1)}" y2="${(oy + (maxRow - minRow) * pr.step_y).toFixed(1)}" stroke="#4a6a4a" stroke-width="0.5"/>`);
+          }
+          parts.push("</g>");
+        }
+        function appendGridGhosts(parts, pr, ox, oy, cols, minRow, maxRow) {
+          if (pr.module_type === MODULE_FONT) return;
+          parts.push("<g>");
+          const ghost = Math.min(0.18, Math.max(0.04, pr.fill_opacity * 0.15));
+          for (let r = minRow; r <= maxRow; r++) {
+            for (let c = 0; c < cols; c++) {
+              const tc = transformedCenter(c, r, pr, ox, oy, minRow, "grid");
+              parts.push(moduleSvgAt(tc[0], tc[1], pr, ghost));
+            }
+          }
+          parts.push("</g>");
+        }
+        function appendGlyphGuides(parts, pr, ox, oy, cols, minRow, maxRow) {
+          const [hw, hh] = moduleInkExtents(pr);
+          const yCap = oy + (C.BODY_TOP - minRow) * pr.step_y;
+          const yBase = oy + (C.BASELINE - minRow) * pr.step_y;
+          const yBodyBot = oy + (C.BODY_BOTTOM - minRow) * pr.step_y;
+          const x0 = ox - hw;
+          const x1 = ox + Math.max(cols - 1, 0) * pr.step_x + hw;
+          parts.push(`<line x1="${x0.toFixed(1)}" y1="${yCap.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${yCap.toFixed(1)}" stroke="#5ec8ff" stroke-width="1" stroke-dasharray="4 3"/>`);
+          parts.push(`<line x1="${x0.toFixed(1)}" y1="${yBase.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${yBase.toFixed(1)}" stroke="#ff6b4a" stroke-width="1.4"/>`);
+          parts.push(`<rect x="${x0.toFixed(1)}" y="${(oy - hh).toFixed(1)}" width="${(x1 - x0).toFixed(1)}" height="${((C.BODY_TOP - minRow) * pr.step_y).toFixed(1)}" fill="#5ec8ff" opacity="0.06"/>`);
+          const descH = Math.max(0, (maxRow - C.BODY_BOTTOM) * pr.step_y + hh);
+          parts.push(`<rect x="${x0.toFixed(1)}" y="${yBodyBot.toFixed(1)}" width="${(x1 - x0).toFixed(1)}" height="${descH.toFixed(1)}" fill="#ff6b4a" opacity="0.06"/>`);
+        }
+        function renderGlyphSvg(ch, pr, showGuides, showGrid) {
+          const coords = getGlyph(ch, pr.col_scale, pr.row_scale);
+          const minRow = 0, maxRow = C.ROWS_TOTAL - 1;
+          const cols = scaledWidth(ch, pr.col_scale);
+          const sz = canvasSize(pr, Math.max(cols - 1, 0), minRow, maxRow);
+          const width = sz[0], height = sz[1], ox = sz[2], oy = sz[3];
+          const parts = [
+            `<svg xmlns="http://www.w3.org/2000/svg" width="${width.toFixed(1)}" height="${height.toFixed(1)}" viewBox="0 0 ${width.toFixed(1)} ${height.toFixed(1)}">`,
+            `<rect width="100%" height="100%" fill="${pr.background}"/>`,
+          ];
+          if (showGrid) {
+            appendGridGuides(parts, pr, ox, oy, cols, minRow, maxRow);
+            appendGridGhosts(parts, pr, ox, oy, cols, minRow, maxRow);
+          }
+          if (showGuides) appendGlyphGuides(parts, pr, ox, oy, cols, minRow, maxRow);
+          const fmap = pr.module_type === MODULE_FONT ? fontCharMap(coords, pr, ch) : {};
+          parts.push("<g>");
+          coords.forEach(function (pt) {
+            const tc = transformedCenter(pt[0], pt[1], pr, ox, oy, minRow, ch);
+            const fc = fmap[pt[0] + "," + pt[1]];
+            parts.push(moduleSvgAt(tc[0], tc[1], pr, null, fc));
+          });
+          parts.push("</g></svg>");
+          return parts.join("");
+        }
+        function renderTextSvg(text, pr, showGuides, previewScale, kern) {
+          const laid = layoutText(text, pr, kern);
+          const ellipses = laid[0], maxCol = laid[1], minRow = laid[2], maxRow = laid[3];
+          const glyphCoords = {};
+          ellipses.forEach(function (e) {
+            const ch = e[2];
+            if (!glyphCoords[ch]) glyphCoords[ch] = [];
+            glyphCoords[ch].push([Math.round(e[0]), e[1]]);
+          });
+          const charMaps = {};
+          if (pr.module_type === MODULE_FONT) {
+            Object.keys(glyphCoords).forEach(function (ch) {
+              charMaps[ch] = fontCharMap(glyphCoords[ch], pr, ch);
+            });
+          }
+          const sz = canvasSize(pr, maxCol, minRow, maxRow);
+          const width = sz[0], height = sz[1], ox = sz[2], oy = sz[3];
+          const scale = Math.max(0.05, previewScale);
+          const [hw] = moduleInkExtents(pr);
+          const parts = [
+            `<svg xmlns="http://www.w3.org/2000/svg" width="${(width * scale).toFixed(1)}" height="${(height * scale).toFixed(1)}" viewBox="0 0 ${width.toFixed(1)} ${height.toFixed(1)}">`,
+            `<rect width="100%" height="100%" fill="${pr.background}"/>`,
+          ];
+          if (showGuides) {
+            const yBase = oy + (C.BASELINE - minRow) * pr.step_y;
+            parts.push(`<line x1="${(ox - hw).toFixed(1)}" y1="${yBase.toFixed(1)}" x2="${(ox + maxCol * pr.step_x + hw).toFixed(1)}" y2="${yBase.toFixed(1)}" stroke="#ff6b4a" stroke-width="1" opacity="0.7"/>`);
+          }
+          parts.push("<g>");
+          ellipses.forEach(function (e) {
+            const tc = transformedCenter(e[0], e[1], pr, ox, oy, minRow, e[2]);
+            const fmap = charMaps[e[2]] || {};
+            const fc = fmap[Math.round(e[0]) + "," + e[1]];
+            parts.push(moduleSvgAt(tc[0], tc[1], pr, null, fc));
+          });
+          parts.push("</g></svg>");
+          return parts.join("");
+        }
+
+        function effectiveText() {
+          return (state.text || state.defaultText || "").trim();
+        }
+
+        function effectiveGlyph() {
+          return state.glyph || state.defaultGlyph || "А";
+        }
+
+        function mergeServerParams(args) {
+          if (!args) return;
+          const base = Object.assign({}, DEFAULTS, state.params, args.params || {});
+          if (args.module_type != null && args.module_type !== "") {
+            base.module_type = args.module_type;
+          }
+          if (args.custom_svg_markup != null) {
+            base.custom_svg_markup = args.custom_svg_markup;
+          }
+          if (args.params) {
+            if (args.params.module_type != null && args.params.module_type !== "") {
+              base.module_type = args.params.module_type;
+            }
+            if (args.params.custom_svg_markup != null) {
+              base.custom_svg_markup = args.params.custom_svg_markup;
+            }
+            if (args.params.font_paths) base.font_paths = args.params.font_paths;
+            if (args.params.font_alphabet) base.font_alphabet = args.params.font_alphabet;
+          }
+          state.serverDeform = {
+            jitter_x: base.jitter_x,
+            row_jitter: base.row_jitter,
+            slant_angle: base.slant_angle,
+            module_angle: base.module_angle,
+            seed: base.seed,
+          };
+          state.params = base;
+          if (args.kerning_pairs) state.kerning_pairs = args.kerning_pairs;
+        }
+
+        function readAllFromParent() {
+          const doc = window.parent.document;
+          const keepMarkup = state.params.custom_svg_markup || "";
+          const keepFontPaths = state.params.font_paths || null;
+          const keepAlphabet = state.params.font_alphabet || "";
+          const lockedModuleType = state.params.module_type || "";
+          const out = Object.assign({}, state.params);
+          const serverDeform = state.serverDeform || {};
+          doc.querySelectorAll('[data-testid="stSlider"] input[type="range"]').forEach(function (input) {
+            const wrap = input.closest('[data-testid="stSlider"]');
+            const label = input.getAttribute("aria-label") || "";
+            const key = resolveSliderKey(label, wrap);
+            if (!key) return;
+            if (!DEFORM_SLIDER_KEYS[key] && (!wrap || wrap.offsetParent === null)) return;
+            let val = parseFloat(input.value);
+            if (Number.isNaN(val)) return;
+            if (key === "col_scale" || key === "row_scale") val = Math.round(val);
+            if (key === "preview_scale") {
+              state.preview_scale = val;
+              return;
+            }
+            if (key === "_kern_delta") return;
+            if (DEFORM_SLIDER_KEYS[key]) {
+              const serverVal = parseFloat(serverDeform[key]);
+              if (
+                !Number.isNaN(serverVal)
+                && Math.abs(serverVal) > 1e-9
+                && Math.abs(val) < 1e-9
+              ) {
+                out[key] = serverVal;
+                return;
+              }
+            }
+            out[key] = val;
+          });
+          if (serverDeform.seed != null && Number.isFinite(serverDeform.seed)) {
+            out.seed = Math.round(serverDeform.seed);
+          }
+          doc.querySelectorAll('[data-testid="stNumberInput"]').forEach(function (wrap) {
+            const label = wrap.innerText || "";
+            if (!label.includes("Random Seed")) return;
+            const inp = wrap.querySelector("input");
+            if (inp) out.seed = Math.round(parseFloat(inp.value) || 0);
+          });
+          doc.querySelectorAll('[data-testid="stTextInput"] input').forEach(function (inp) {
+            const wrap = inp.closest('[data-testid="stTextInput"]');
+            const label = wrap ? wrap.innerText || "" : "";
+            if (label.includes("Строка (All-Caps)")) {
+              const val = (inp.value || "").trim().toUpperCase();
+              if (val) state.text = val;
+            }
+          });
+          doc.querySelectorAll('[data-testid="stCheckbox"]').forEach(function (wrap) {
+            const txt = wrap.innerText || "";
+            const inp = wrap.querySelector('input[type="checkbox"]');
+            if (!inp) return;
+            if (txt.includes("Показать Baseline") || txt.includes("Baseline / Cap-Height")) {
+              state.show_guides = inp.checked;
+            }
+            if (txt.includes("Сетка модулей")) state.show_grid = inp.checked;
+            if (txt.includes("Рандом")) out.module_font_randomize = inp.checked;
+          });
+          if (lockedModuleType) out.module_type = lockedModuleType;
+          if (keepMarkup) out.custom_svg_markup = keepMarkup;
+          if (keepFontPaths) out.font_paths = keepFontPaths;
+          if (keepAlphabet) out.font_alphabet = keepAlphabet;
+          state.params = out;
+        }
+
+        function readKerningFromParent() {
+          const doc = window.parent.document;
+          let pair = "";
+          let delta = 0;
+          doc.querySelectorAll('[data-testid="stTextInput"]').forEach(function (wrap) {
+            const label = wrap.innerText || "";
+            if (label.includes("Пара") && !label.includes("Строка")) {
+              const inp = wrap.querySelector("input");
+              if (inp) pair = (inp.value || "").trim().toUpperCase();
+            }
+          });
+          doc.querySelectorAll('[data-testid="stSlider"] input[type="range"]').forEach(function (input) {
+            if ((input.getAttribute("aria-label") || "") === "Сдвиг (cols)") {
+              delta = parseFloat(input.value) || 0;
+            }
+          });
+          const kern = Object.assign({}, state.kerning_pairs || {});
+          if (pair.length === 2) kern[pair] = delta;
+          state.kerning_pairs = kern;
+        }
+
+        function bindParentBridge() {
+          if (parentBridgeBound) return;
+          parentBridgeBound = true;
+          let lastSig = "";
+          function tick() {
+            if (state.previewOnly) {
+              try {
+                readAllFromParent();
+                readKerningFromParent();
+              } catch (err) {
+                /* parent DOM may be unavailable briefly during Streamlit reruns */
+              }
+              const sig = JSON.stringify([
+                state.params,
+                state.preview_scale,
+                effectiveText(),
+                effectiveGlyph(),
+                state.mode,
+                state.show_guides,
+                state.show_grid,
+                state.kerning_pairs,
+              ]);
+              if (sig !== lastSig) {
+                lastSig = sig;
+                renderGlyphs();
+              }
+            }
+            requestAnimationFrame(tick);
+          }
+          requestAnimationFrame(tick);
+        }
+
+        function readParamsFromDom() {
+          const out = Object.assign({}, state.params);
+          document.querySelectorAll("#controls input[name]").forEach(function (el) {
+            const name = el.name;
+            let val = el.type === "number" ? parseFloat(el.value) : parseFloat(el.value);
+            if (name === "col_scale" || name === "row_scale" || name === "seed") val = Math.round(val);
+            out[name] = val;
+          });
+          return out;
+        }
+
+        function writeParamsToDom(params) {
+          document.querySelectorAll("#controls input[name]").forEach(function (el) {
+            const name = el.name;
+            if (name === "preview_scale") {
+              el.value = state.preview_scale;
+            } else if (params[name] != null) {
+              el.value = params[name];
+            }
+          });
+          updateValueLabels();
+        }
+
+        function updateValueLabels() {
+          document.querySelectorAll(".val[data-for]").forEach(function (el) {
+            const name = el.getAttribute("data-for");
+            const input = document.querySelector('#controls input[name="' + name + '"]');
+            if (input) el.textContent = input.value;
+          });
+        }
+
+        function scheduleRender() {
+          if (renderQueued) return;
+          renderQueued = true;
+          requestAnimationFrame(function () {
+            renderQueued = false;
+            renderGlyphs();
+          });
+        }
+
+        function renderGlyphs() {
+          if (!state.previewOnly) {
+            state.params = readParamsFromDom();
+            state.preview_scale =
+              parseFloat(document.querySelector('input[name="preview_scale"]').value) || 0.38;
+            updateValueLabels();
+          }
+          const pr = p();
+          const preview = document.getElementById("preview");
+          let svg = "";
+          if (state.mode === "glyph") {
+            svg = renderGlyphSvg(effectiveGlyph(), pr, state.show_guides, state.show_grid);
+          } else {
+            svg = renderTextSvg(
+              effectiveText(),
+              pr,
+              state.show_guides,
+              state.preview_scale,
+              state.kerning_pairs || {}
+            );
+          }
+          preview.innerHTML = svg;
+        }
+
+        function collectPayload(sync) {
+          const params = readParamsFromDom();
+          state.preview_scale = parseFloat(document.querySelector('input[name="preview_scale"]').value) || 0.38;
+          return {
+            sync: !!sync,
+            mode: state.mode,
+            params: Object.assign({}, params, {
+              preview_scale: state.preview_scale,
+              kerning_pairs: state.kerning_pairs,
+            }),
+          };
+        }
+
+        function bindControls() {
+          document.querySelectorAll('#controls input[type="range"], #controls input[type="number"]').forEach(function (el) {
+            el.addEventListener("input", function () {
+              scheduleRender();
+            });
+          });
+          document.querySelectorAll(".quick-row button[data-angle]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+              const angle = parseFloat(btn.getAttribute("data-angle"));
+              const slider = document.querySelector('input[name="module_angle"]');
+              slider.value = angle;
+              scheduleRender();
+            });
+          });
+          document.getElementById("syncBtn").addEventListener("click", function () {
+            setValue(collectPayload(true));
+          });
+          document.getElementById("modeText").addEventListener("click", function () {
+            state.mode = "text";
+            updateModeButtons();
+            scheduleRender();
+          });
+          document.getElementById("modeGlyph").addEventListener("click", function () {
+            state.mode = "glyph";
+            updateModeButtons();
+            scheduleRender();
+          });
+        }
+
+        function updateModeButtons() {
+          document.getElementById("modeText").classList.toggle("active", state.mode === "text");
+          document.getElementById("modeGlyph").classList.toggle("active", state.mode === "glyph");
+        }
+
+        function applyCommand(cmd) {
+          if (!cmd || !cmd.params) return;
+          mergeServerParams({ params: cmd.params, module_type: cmd.params.module_type, custom_svg_markup: cmd.params.custom_svg_markup });
+          if (!state.previewOnly) writeParamsToDom(state.params);
+          scheduleRender();
+        }
+
+        window.addEventListener("message", function (event) {
+          const data = event.data;
+          if (!data || data.type !== "streamlit:render") return;
+          const args = data.args || {};
+          if (args.glyph_pack && !PACK) {
+            PACK = JSON.parse(args.glyph_pack);
+            C = Object.assign({}, PACK.constants, { BODY_TOP: 4, BODY_BOTTOM: 23 });
+          }
+          state.previewOnly = !!args.preview_only;
+          if (state.previewOnly) {
+            document.getElementById("studio").classList.add("preview-only");
+            bindParentBridge();
+          }
+          state.mode = args.mode || state.mode;
+          state.defaultText = args.text || state.defaultText || "";
+          state.text = args.text || state.text || state.defaultText || "";
+          state.defaultGlyph = args.glyph || state.defaultGlyph || "А";
+          state.glyph = args.glyph || state.glyph || state.defaultGlyph || "А";
+          state.show_guides = !!args.show_guides;
+          state.show_grid = !!args.show_grid;
+          state.preview_scale = args.preview_scale != null ? args.preview_scale : state.preview_scale;
+          mergeServerParams(args);
+          const cmdId = args.command_id != null ? args.command_id : -1;
+          if (args.command && cmdId !== lastCommandId) {
+            lastCommandId = cmdId;
+            applyCommand(args.command);
+          } else if (args.params) {
+            if (!state.previewOnly) writeParamsToDom(state.params);
+          }
+          if (!state.previewOnly) {
+            const ps = document.querySelector('input[name="preview_scale"]');
+            if (ps) ps.value = state.preview_scale;
+            updateModeButtons();
+          }
+          scheduleRender();
+          setReady(args.height || 720);
+        });
+
+        bindControls();
+        setReady(720);
+      })();
+    </script>
+  </body>
+</html>
