@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 import base64
 
@@ -397,8 +398,21 @@ def _render_params_from_profile(profile: dict) -> RenderParams:
     )
 
 
-def _preset_preview_svg(profile: dict, specimen: str) -> str:
+def _preset_summary(profile: dict) -> str:
+    mt = str(profile.get("module_type") or MODULE_OVAL)
+    module_label = MODULE_LABEL_BY_TYPE.get(mt, mt)
+    return (
+        f"rx {float(profile.get('rx', 0)):.0f} · ry {float(profile.get('ry', 0)):.0f} · "
+        f"∠ {float(profile.get('module_angle', 0)):.0f}° · "
+        f"step {float(profile.get('step_x', 0)):.0f}/{float(profile.get('step_y', 0)):.0f} · "
+        f"slant {float(profile.get('slant_angle', 0)):.0f}° · {module_label}"
+    )
+
+
+def _preset_preview_svg(profile: dict, specimen: str, *, invert: bool = False) -> str:
     params = _render_params_from_profile(profile)
+    if invert:
+        params = replace(params, fill="#000000", stroke="#000000", background="#FFFFFF")
     return render_text_svg(specimen, params)
 
 
@@ -568,13 +582,15 @@ def show_svg(
     height: int = 480,
     scale: float = 1.0,
     fit: str = "width",
+    preview_bg: str = "#000000",
+    preview_border: str = "#2A2A2A",
 ) -> None:
     """Inline SVG preview via ``st.html`` + data-uri (safe, no iframe)."""
     payload = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     box_style = (
-        f"width:100%;min-height:{int(height)}px;background:#000;"
+        f"width:100%;min-height:{int(height)}px;background:{preview_bg};"
         "display:flex;align-items:center;justify-content:center;"
-        "border:1px solid #2A2A2A;border-radius:0.4rem;box-sizing:border-box;"
+        f"border:1px solid {preview_border};border-radius:0.4rem;box-sizing:border-box;"
         "padding:8px;overflow:auto;"
     )
     if fit == "contain":
@@ -818,26 +834,76 @@ def _inject_app_theme() -> None:
             white-space: nowrap !important;
             font-size: 0.85rem !important;
           }}
-          div[data-testid="stVerticalBlockBorderWrapper"] {{
-            background: transparent;
-          }}
-          span.cps-preset-active-anchor + div[data-testid="stVerticalBlockBorderWrapper"] {{
-            border: 1px solid #00FF66 !important;
-            box-shadow: 0 0 0 1px #00FF66, 0 0 12px rgba(0, 255, 102, 0.22);
+          span.cps-preset-card-anchor + div[data-testid="stVerticalBlockBorderWrapper"] {{
+            border-radius: 0.5rem;
             position: relative;
+            overflow: hidden;
           }}
-          span.cps-preset-active-anchor + div[data-testid="stVerticalBlockBorderWrapper"]::after {{
-            content: "";
+          span.cps-preset-card-anchor:not(.cps-preset-card-active)
+            + div[data-testid="stVerticalBlockBorderWrapper"] {{
+            background: #141414 !important;
+            border: 1px solid #2A2A2A !important;
+          }}
+          span.cps-preset-card-anchor:not(.cps-preset-card-active)
+            + div[data-testid="stVerticalBlockBorderWrapper"] h3 {{
+            color: #FFFFFF !important;
+          }}
+          span.cps-preset-card-anchor:not(.cps-preset-card-active)
+            + div[data-testid="stVerticalBlockBorderWrapper"] .cps-preset-params-line {{
+            color: #9A9A9A !important;
+          }}
+          span.cps-preset-card-active + div[data-testid="stVerticalBlockBorderWrapper"] {{
+            background: #F5F5F5 !important;
+            border: 1px solid #CCCCCC !important;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+          }}
+          span.cps-preset-card-active + div[data-testid="stVerticalBlockBorderWrapper"]::before {{
+            content: "● Активно";
             position: absolute;
             top: 10px;
             right: 10px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #00FF66;
-            box-shadow: 0 0 8px #00FF66;
+            background: #111111;
+            color: #FFFFFF;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            padding: 3px 9px;
+            border-radius: 999px;
             pointer-events: none;
-            z-index: 2;
+            z-index: 3;
+          }}
+          span.cps-preset-card-active + div[data-testid="stVerticalBlockBorderWrapper"] h3 {{
+            color: #000000 !important;
+            padding-right: 5.5rem;
+          }}
+          span.cps-preset-card-active + div[data-testid="stVerticalBlockBorderWrapper"] .cps-preset-params-line {{
+            color: #555555 !important;
+          }}
+          span.cps-preset-card-active + div[data-testid="stVerticalBlockBorderWrapper"]
+            [data-testid="stHorizontalBlock"] > [data-testid="column"]:first-child
+            div[data-testid="stButton"] > button {{
+            background-color: #111111 !important;
+            color: #FFFFFF !important;
+            border: 1px solid #111111 !important;
+            font-weight: 600 !important;
+          }}
+          span.cps-preset-card-active + div[data-testid="stVerticalBlockBorderWrapper"]
+            [data-testid="stHorizontalBlock"] > [data-testid="column"]:first-child
+            div[data-testid="stButton"] > button:hover {{
+            background-color: #000000 !important;
+            border-color: #000000 !important;
+            color: #FFFFFF !important;
+          }}
+          span.cps-preset-card-active + div[data-testid="stVerticalBlockBorderWrapper"]
+            [data-testid="stHorizontalBlock"] > [data-testid="column"]:first-child
+            div[data-testid="stButton"] > button p {{
+            color: #FFFFFF !important;
+          }}
+          .cps-preset-params-line {{
+            margin: 0.15rem 0 0.65rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11px;
+            line-height: 1.35;
           }}
           @media (max-width: 768px) {{
             h1 {{ font-size: 1.35rem !important; }}
@@ -1455,18 +1521,35 @@ with tab_styles:
     for idx, (pname, profile) in enumerate(all_profiles.items()):
         with gallery_cols[idx % 3]:
             is_active = pname == st.session_state.get("current_preset_name")
-            if is_active:
-                st.markdown(
-                    '<span class="cps-preset-active-anchor" aria-hidden="true"></span>',
-                    unsafe_allow_html=True,
-                )
+            anchor_cls = (
+                "cps-preset-card-anchor cps-preset-card-active"
+                if is_active
+                else "cps-preset-card-anchor"
+            )
+            st.markdown(
+                f'<span class="{anchor_cls}" aria-hidden="true"></span>',
+                unsafe_allow_html=True,
+            )
             with st.container(border=True):
                 st.subheader(pname, divider=False)
                 try:
-                    preview_svg = _preset_preview_svg(profile, gallery_specimen)
-                    show_svg(preview_svg, height=112, scale=0.28, fit="contain")
+                    preview_svg = _preset_preview_svg(
+                        profile, gallery_specimen, invert=is_active
+                    )
+                    show_svg(
+                        preview_svg,
+                        height=112,
+                        scale=0.28,
+                        fit="contain",
+                        preview_bg="#FFFFFF" if is_active else "#000000",
+                        preview_border="#E0E0E0" if is_active else "#2A2A2A",
+                    )
                 except Exception as exc:  # noqa: BLE001
                     st.caption(f"Превью недоступно: {exc}")
+                st.markdown(
+                    f'<p class="cps-preset-params-line">{_preset_summary(profile)}</p>',
+                    unsafe_allow_html=True,
+                )
                 load_col, del_col = st.columns([4, 1])
                 with load_col:
                     st.button(
