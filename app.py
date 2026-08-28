@@ -12,12 +12,10 @@ import streamlit.components.v1 as components
 
 from engine.presets import (
     BUILTIN_PRESETS,
-    DEFAULT_PRESET_NAMES,
     PROTECTED_FROM_DELETE,
     apply_profile_to_session,
     canonical_preset_name,
     ensure_presets_store,
-    is_user_preset,
     merge_imported_presets,
     presets_library_to_json,
     profiles_from_json,
@@ -133,6 +131,7 @@ def _ensure_defaults() -> None:
         st.session_state["word_text"] = DEFAULT_PHRASE
         st.session_state.setdefault("presets", {})
         st.session_state.setdefault("current_preset_name", "Regular")
+        st.session_state.setdefault("styles_preset_select", "Regular")
         st.session_state.setdefault("new_preset_name", "")
         ensure_presets_store(st.session_state)
         st.session_state.setdefault("word_show_guides", False)
@@ -159,6 +158,7 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("word_text", DEFAULT_PHRASE)
     st.session_state.setdefault("presets", {})
     st.session_state.setdefault("current_preset_name", "Regular")
+    st.session_state.setdefault("styles_preset_select", "Regular")
     st.session_state.setdefault("new_preset_name", "")
     ensure_presets_store(st.session_state)
     st.session_state.setdefault("word_show_guides", False)
@@ -317,11 +317,6 @@ def _all_presets() -> dict:
     return ensure_presets_store(st.session_state)
 
 
-def _user_preset_names() -> list[str]:
-    presets = _all_presets()
-    return sorted(name for name in presets if is_user_preset(name, presets))
-
-
 def _sync_module_ui_from_profile() -> None:
     """Keep module-type and font selectors aligned after loading a preset."""
     _sync_module_type_label()
@@ -337,19 +332,86 @@ def _sync_module_ui_from_profile() -> None:
 def _apply_preset_profile(name: str, profile: dict) -> None:
     apply_profile_to_session(st.session_state, profile)
     st.session_state["current_preset_name"] = name
+    st.session_state["styles_preset_select"] = name
     st.session_state["font_style"] = name
     _sync_module_ui_from_profile()
 
 
-def _on_preset_select() -> None:
-    name = str(st.session_state.get("current_preset_name") or "Regular")
+def _apply_preset_by_name(name: str) -> None:
+    """Load a named preset into sidebar sliders and refresh preview."""
+    label = str(name or "").strip()
+    if not label:
+        return
     presets = _all_presets()
-    profile = presets.get(name)
+    profile = presets.get(label)
     if not profile:
         return
-    _apply_preset_profile(name, profile)
+    _apply_preset_profile(label, profile)
+    st.session_state["styles_preset_select"] = label
     _clear_render_cache()
     _push_live_command()
+    st.rerun()
+
+
+def _apply_styles_preset_select() -> None:
+    _apply_preset_by_name(str(st.session_state.get("styles_preset_select") or "Regular"))
+
+
+def _render_params_from_profile(profile: dict) -> RenderParams:
+    """Build render params from a stored preset profile (gallery / export)."""
+    fill = _safe_hex_color(profile.get("fill"), THEME["fill"])
+    stroke = _safe_hex_color(profile.get("stroke"), THEME["stroke"])
+    background = _safe_hex_color(profile.get("background"), THEME["background"])
+    raw_kern = profile.get("kerning_pairs") or {}
+    kern_pairs = tuple(
+        sorted((str(k), float(v)) for k, v in dict(raw_kern).items() if len(str(k)) == 2)
+    )
+    return RenderParams(
+        rx=float(profile.get("rx", 30.0)),
+        ry=float(profile.get("ry", 10.0)),
+        stroke_width=float(profile.get("stroke_width", 0.0)),
+        fill_opacity=float(profile.get("fill_opacity", 1.0)),
+        step_x=float(profile.get("step_x", 38.5)),
+        step_y=float(profile.get("step_y", 16.0)),
+        letter_spacing=float(profile.get("letter_spacing", 1.0)),
+        col_scale=int(profile.get("col_scale", 1)),
+        row_scale=int(profile.get("row_scale", 1)),
+        fill=fill,
+        stroke=stroke,
+        background=background,
+        show_guides=False,
+        show_grid=False,
+        preview_scale=0.28,
+        kerning_pairs=kern_pairs,
+        slant_angle=float(profile.get("slant_angle", 0.0)),
+        jitter_x=float(profile.get("jitter_x", 0.0)),
+        row_jitter=float(profile.get("row_jitter", 0.0)),
+        seed=int(profile.get("seed", 0)),
+        module_angle=float(profile.get("module_angle", 0.0)),
+        module_type=str(profile.get("module_type", MODULE_OVAL)),
+        custom_svg_markup=str(profile.get("custom_svg_markup") or ""),
+        module_font_file=str(profile.get("module_font_file") or ""),
+        module_font_chars=str(profile.get("module_font_chars") or ""),
+        module_font_fill_order=str(profile.get("module_font_fill_order") or "columns"),
+        module_font_randomize=bool(profile.get("module_font_randomize", False)),
+        module_font_symbols_per_module=int(profile.get("module_font_symbols_per_module", 1)),
+    )
+
+
+def _preset_summary(profile: dict) -> str:
+    mt = str(profile.get("module_type") or MODULE_OVAL)
+    module_label = MODULE_LABEL_BY_TYPE.get(mt, mt)
+    return (
+        f"rx {float(profile.get('rx', 0)):.0f} · ry {float(profile.get('ry', 0)):.0f} · "
+        f"∠ {float(profile.get('module_angle', 0)):.0f}° · "
+        f"step {float(profile.get('step_x', 0)):.0f}/{float(profile.get('step_y', 0)):.0f} · "
+        f"slant {float(profile.get('slant_angle', 0)):.0f}° · {module_label}"
+    )
+
+
+def _preset_preview_svg(profile: dict, specimen: str) -> str:
+    params = _render_params_from_profile(profile)
+    return render_text_svg(specimen, params)
 
 
 def _load_preset(name: str) -> None:
@@ -362,13 +424,14 @@ def _load_preset(name: str) -> None:
 
 
 def _update_current_preset() -> None:
-    """Overwrite the active preset with current slider values."""
-    name = str(st.session_state.get("current_preset_name") or "Regular").strip()
+    """Overwrite the selected preset with current slider values."""
+    name = str(st.session_state.get("styles_preset_select") or "Regular").strip()
     if not name:
         return
     presets = dict(_all_presets())
     presets[name] = snapshot_from_session(dict(st.session_state))
     st.session_state["presets"] = presets
+    st.session_state["current_preset_name"] = name
     st.session_state["font_style"] = name
     _clear_render_cache()
     _push_live_command()
@@ -383,6 +446,7 @@ def _create_new_preset() -> None:
     presets[name] = snapshot_from_session(dict(st.session_state))
     st.session_state["presets"] = presets
     st.session_state["current_preset_name"] = name
+    st.session_state["styles_preset_select"] = name
     st.session_state["font_style"] = name
     st.session_state["new_preset_name"] = ""
     _clear_render_cache()
@@ -401,14 +465,12 @@ def _delete_preset_by_name(name: str) -> None:
     st.session_state["presets"] = presets
     if str(st.session_state.get("current_preset_name") or "") == target:
         _load_preset("Regular")
+    st.session_state["styles_preset_select"] = str(
+        st.session_state.get("current_preset_name") or "Regular"
+    )
     _clear_render_cache()
     _push_live_command()
     st.rerun()
-
-
-def _delete_current_preset() -> None:
-    """Remove the active user preset (Regular is protected)."""
-    _delete_preset_by_name(str(st.session_state.get("current_preset_name") or ""))
 
 
 def _import_presets_file(uploaded) -> None:
@@ -469,6 +531,7 @@ def _reset_to_regular() -> None:
     st.session_state["presets"] = presets
     st.session_state["_regular_version"] = REGULAR_VERSION
     st.session_state["current_preset_name"] = "Regular"
+    st.session_state["styles_preset_select"] = "Regular"
     st.session_state["font_style"] = "Regular"
     _sync_module_ui_from_profile()
     _clear_render_cache()
@@ -990,93 +1053,7 @@ _ensure_ink_colors()
 st.title("Compresso Parametric Studio")
 
 with st.sidebar:
-    st.markdown("### Начертания")
-
-    _preset_store = _all_presets()
-    _preset_names = list(_preset_store.keys())
-    if st.session_state.get("current_preset_name") not in _preset_names:
-        st.session_state["current_preset_name"] = "Regular"
-
-    st.selectbox(
-        "Начертание",
-        options=_preset_names,
-        key="current_preset_name",
-        on_change=_on_preset_select,
-    )
-
-    st.button(
-        "💾 Сохранить изменения",
-        use_container_width=True,
-        type="primary",
-        on_click=_update_current_preset,
-        help="Перезаписать параметры выбранного начертания текущими значениями ползунков.",
-    )
-
-    st.text_input(
-        "Новое начертание",
-        key="new_preset_name",
-        placeholder="Например: Ultra Bold 45",
-    )
-    st.button(
-        "➕ Создать начертание",
-        use_container_width=True,
-        on_click=_create_new_preset,
-    )
-
-    _current = str(st.session_state.get("current_preset_name") or "Regular")
-    _can_delete = _current not in PROTECTED_FROM_DELETE
-    st.button(
-        "🗑 Удалить",
-        use_container_width=True,
-        disabled=not _can_delete,
-        on_click=_delete_current_preset,
-        help="Regular нельзя удалить.",
-    )
-    st.button(
-        "Сбросить к Regular",
-        use_container_width=True,
-        on_click=_reset_to_regular,
-    )
-
-    import_err = st.session_state.pop("_presets_import_error", None)
-    if import_err:
-        st.error(f"Импорт пресетов: {import_err}")
-
-    json_col1, json_col2 = st.columns(2)
-    with json_col1:
-        st.download_button(
-            "Скачать JSON",
-            data=presets_library_to_json(
-                _all_presets(),
-                active=str(st.session_state.get("current_preset_name") or "Regular"),
-            ).encode("utf-8"),
-            file_name="compresso-presets.json",
-            mime="application/json",
-            use_container_width=True,
-            help="Выгрузить всю библиотеку начертаний.",
-        )
-    with json_col2:
-        uploaded_presets = st.file_uploader(
-            "JSON",
-            type=["json"],
-            key="presets_json_upload",
-            label_visibility="collapsed",
-            help="Загрузить библиотеку начертаний из файла.",
-        )
-    if uploaded_presets is not None:
-        _import_presets_file(uploaded_presets)
-
-    st.divider()
-    st.markdown("### Экспорт TTF")
-    st.text_input(
-        "Имя для TTF",
-        key="font_style",
-        placeholder="Regular",
-        help="Попадёт в name table экспортируемого шрифта.",
-    )
-    st.caption(f"Сейчас: **{_resolved_font_style()}**")
-
-    with st.expander("Модуль", expanded=False):
+    with st.expander("Модуль", expanded=True):
         module_label = st.radio(
             "Тип модуля",
             MODULE_TYPE_LABELS,
@@ -1195,21 +1172,19 @@ with st.sidebar:
         ) == 0:
             st.caption("Seed не влияет, пока jitter = 0.")
 
-    with st.expander("Цвет", expanded=False):
-        st.caption("Не меняется при выборе пресета — только вручную или при сбросе.")
+    with st.expander("Цвет и направляющие", expanded=False):
+        st.caption("Цвет не меняется при выборе пресета — только вручную или при сбросе.")
         st.color_picker("Fill (модули)", key="fill")
         st.color_picker("Stroke (обводка)", key="stroke")
         st.color_picker("Background (фон)", key="background")
+        st.checkbox("Показать Baseline (наборщик)", key="word_show_guides")
+        st.checkbox("Сетка модулей (наборщик)", key="word_show_grid")
 
     mt = str(st.session_state.get("module_type") or MODULE_OVAL)
     if mt == MODULE_CUSTOM_SVG and st.session_state.get("custom_svg_markup"):
         _push_live_command()
     elif mt == MODULE_FONT and st.session_state.get("module_font_file"):
         _push_live_command()
-
-    _persist_presets_to_browser()
-
-font_style = _resolved_font_style()
 
 tab_words, tab_inspect, tab_styles = st.tabs(
     ["Наборщик текста", "Инспектор глифа", "Начертания"]
@@ -1224,19 +1199,13 @@ with tab_words:
     st.text_input("Строка (All-Caps)", key="word_text")
     text = _to_all_caps(st.session_state.get("word_text")) or DEFAULT_PHRASE
 
-    pc1, pc2, pc3 = st.columns([2, 1, 1])
-    with pc1:
-        st.slider(
-            "Размер шрифта (превью)",
-            min_value=0.15,
-            max_value=1.0,
-            step=0.01,
-            key="font_size",
-        )
-    with pc2:
-        st.checkbox("Показать Baseline", key="word_show_guides")
-    with pc3:
-        st.checkbox("Сетка модулей", key="word_show_grid")
+    st.slider(
+        "Размер шрифта (превью)",
+        min_value=0.15,
+        max_value=1.0,
+        step=0.01,
+        key="font_size",
+    )
 
     preview_scale = float(st.session_state.get("font_size", DEFAULT_FONT_SIZE))
     live_params = enrich_live_params(st.session_state)
@@ -1326,8 +1295,7 @@ with tab_words:
     cache_key = params_cache_key(export_params)
     text_svg_export = _cached_text_svg(text, cache_key, stamp_digest)
 
-    kern_count = len(export_params.kerning_pairs)
-    col_svg, col_ttf = st.columns(2)
+    col_svg, = st.columns(1)
     with col_svg:
         st.download_button(
             label="Экспорт SVG",
@@ -1337,57 +1305,6 @@ with tab_words:
             use_container_width=True,
             key=f"dl_svg_{stamp_digest}",
         )
-    with col_ttf:
-        try:
-            ttf_bytes = _cached_ttf_bytes(cache_key, font_style, stamp_digest)
-            st.download_button(
-                label=f"Скачать TTF · {font_style}",
-                data=ttf_bytes,
-                file_name=f"Compresso-Parametric-{style_slug(font_style)}.ttf",
-                mime="font/ttf",
-                use_container_width=True,
-                key=f"dl_ttf_{stamp_digest}_{style_slug(font_style)}",
-            )
-            st.caption(f"Кернинг: **{kern_count}** пар")
-        except Exception as exc:  # noqa: BLE001 — surface in UI
-            st.error(f"TTF: {exc}")
-
-    with st.expander("Экспорт семейства (ZIP)", expanded=False):
-        st.caption(
-            "В архив: все built-in + ваши сохранённые начертания — SVG алфавит, specimen и TTF."
-        )
-        family_styles = _all_presets()
-        live_name = _resolved_font_style()
-        if live_name not in family_styles:
-            family_styles = dict(family_styles)
-            family_styles[live_name] = snapshot_from_session(dict(st.session_state))
-
-        st.write(
-            f"Начертаний: **{len(family_styles)}** — " + ", ".join(family_styles.keys())
-        )
-        if st.button("Собрать ZIP", use_container_width=True):
-            try:
-                with st.spinner("Сборка ZIP…"):
-                    st.session_state["family_zip_bytes"] = build_family_zip(
-                        family_styles,
-                        family=FAMILY,
-                        specimen=text or DEFAULT_PHRASE,
-                    )
-                    st.session_state["family_zip_ok"] = True
-            except Exception as exc:  # noqa: BLE001
-                st.session_state["family_zip_ok"] = False
-                st.error(f"ZIP: {exc}")
-
-        zip_bytes = st.session_state.get("family_zip_bytes")
-        if zip_bytes and st.session_state.get("family_zip_ok"):
-            st.download_button(
-                "Скачать Compresso_Family_Pack.zip",
-                data=zip_bytes,
-                file_name="Compresso_Family_Pack.zip",
-                mime="application/zip",
-                use_container_width=True,
-                key=f"dl_family_zip_{len(zip_bytes)}",
-            )
 
 with tab_inspect:
     c1, c2 = st.columns([1, 2])
@@ -1446,33 +1363,189 @@ with tab_inspect:
         )
 
 with tab_styles:
-    st.markdown("### Библиотека начертаний")
+    st.markdown("### Начертания")
     st.caption(
-        "Выбор и редактирование — в боковом меню. Пользовательские начертания "
-        "сохраняются в localStorage браузера и в JSON-файл."
+        "Выберите начертание, загрузите его в редактор (сайдбар) или сохраните текущие ползунки. "
+        "Библиотека синхронизируется с localStorage браузера."
     )
 
     all_profiles = _all_presets()
     preset_names = list(all_profiles.keys())
+    if st.session_state.get("styles_preset_select") not in preset_names:
+        st.session_state["styles_preset_select"] = str(
+            st.session_state.get("current_preset_name") or "Regular"
+        )
 
-    st.markdown("**Базовые**")
-    st.caption(", ".join(n for n in preset_names if n in DEFAULT_PRESET_NAMES) or "—")
+    st.markdown("#### Активное начертание")
+    active_col, btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2.2, 1.2, 1.2, 1, 1])
+    with active_col:
+        st.selectbox(
+            "Начертание",
+            options=preset_names,
+            key="styles_preset_select",
+            label_visibility="collapsed",
+        )
+    with btn_col1:
+        st.button(
+            "Применить / Загрузить в редактор",
+            use_container_width=True,
+            type="primary",
+            on_click=_apply_styles_preset_select,
+        )
+    with btn_col2:
+        st.button(
+            "💾 Сохранить текущие параметры",
+            use_container_width=True,
+            on_click=_update_current_preset,
+            help="Перезаписать выбранное начертание значениями ползунков из сайдбара.",
+        )
+    with btn_col3:
+        st.button(
+            "↺ Regular",
+            use_container_width=True,
+            on_click=_reset_to_regular,
+            help="Сбросить ползунки к Regular.",
+        )
+    with btn_col4:
+        _pick = str(st.session_state.get("styles_preset_select") or "Regular")
+        st.button(
+            "🗑",
+            use_container_width=True,
+            disabled=_pick in PROTECTED_FROM_DELETE,
+            on_click=_delete_preset_by_name,
+            args=(_pick,),
+            help="Удалить выбранное пользовательское начертание.",
+        )
 
-    st.markdown("**Ваши**")
-    custom_names = _user_preset_names()
-    if not custom_names:
-        st.caption("Пока нет — создайте через «➕ Создать начертание» в боковом меню.")
-    else:
-        for cname in custom_names:
-            row_l, row_r = st.columns([5, 1])
-            with row_l:
-                is_active = cname == st.session_state.get("current_preset_name")
-                st.write(f"{'● ' if is_active else ''}{cname}")
-            with row_r:
-                st.button(
-                    "Удалить",
-                    key=f"del_preset_{cname}",
-                    use_container_width=True,
-                    on_click=_delete_preset_by_name,
-                    args=(cname,),
-                )
+    st.caption(
+        f"В редакторе сейчас: **{st.session_state.get('current_preset_name', 'Regular')}**"
+    )
+
+    st.markdown("#### Новое начертание")
+    new_col1, new_col2 = st.columns([3, 1])
+    with new_col1:
+        st.text_input(
+            "Имя нового начертания",
+            key="new_preset_name",
+            placeholder="Например: Display Bold 45",
+            label_visibility="collapsed",
+        )
+    with new_col2:
+        st.button(
+            "➕ Создать из текущих настроек",
+            use_container_width=True,
+            on_click=_create_new_preset,
+        )
+
+    st.markdown("#### Семейство — обзор")
+    gallery_specimen = _to_all_caps(st.session_state.get("word_text")) or DEFAULT_PHRASE
+    gallery_cols = st.columns(3)
+    for idx, (pname, profile) in enumerate(all_profiles.items()):
+        with gallery_cols[idx % 3]:
+            is_active = pname == st.session_state.get("current_preset_name")
+            st.markdown(f"{'**● ' if is_active else ''}{pname}**")
+            try:
+                preview_svg = _preset_preview_svg(profile, gallery_specimen)
+                show_svg(preview_svg, height=100, scale=0.28, fit="contain")
+            except Exception as exc:  # noqa: BLE001
+                st.caption(f"Превью: {exc}")
+            st.caption(_preset_summary(profile))
+            st.button(
+                "Загрузить в редактор",
+                key=f"gallery_apply_{pname}",
+                use_container_width=True,
+                on_click=_apply_preset_by_name,
+                args=(pname,),
+            )
+
+    st.divider()
+    st.markdown("#### Экспорт и импорт")
+    export_err = st.session_state.pop("_presets_import_error", None)
+    if export_err:
+        st.error(f"Импорт пресетов: {export_err}")
+
+    st.text_input(
+        "Имя для TTF",
+        key="font_style",
+        placeholder="Regular",
+        help="Попадёт в name table экспортируемого шрифта.",
+    )
+
+    export_params = with_params(
+        _current_params(),
+        show_guides=False,
+        show_grid=False,
+        preview_scale=1.0,
+        kerning_pairs=tuple(
+            sorted((k, float(v)) for k, v in _live_kerning_dict().items())
+        ),
+    )
+    stamp_digest = _module_stamp_digest()
+    cache_key = params_cache_key(export_params)
+    style_name = _resolved_font_style()
+
+    exp_col1, exp_col2, exp_col3 = st.columns(3)
+    with exp_col1:
+        try:
+            ttf_bytes = _cached_ttf_bytes(cache_key, style_name, stamp_digest)
+            st.download_button(
+                label=f"Скачать TTF · {style_name}",
+                data=ttf_bytes,
+                file_name=f"Compresso-Parametric-{style_slug(style_name)}.ttf",
+                mime="font/ttf",
+                use_container_width=True,
+                key=f"styles_dl_ttf_{stamp_digest}_{style_slug(style_name)}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"TTF: {exc}")
+
+    with exp_col2:
+        family_styles = dict(all_profiles)
+        live_name = style_name
+        if live_name not in family_styles:
+            family_styles[live_name] = snapshot_from_session(dict(st.session_state))
+        zip_specimen = gallery_specimen
+        if st.button("Собрать ZIP семейства", use_container_width=True, key="build_family_zip"):
+            try:
+                with st.spinner("Сборка ZIP…"):
+                    st.session_state["family_zip_bytes"] = build_family_zip(
+                        family_styles,
+                        family=FAMILY,
+                        specimen=zip_specimen,
+                    )
+                    st.session_state["family_zip_ok"] = True
+            except Exception as exc:  # noqa: BLE001
+                st.session_state["family_zip_ok"] = False
+                st.error(f"ZIP: {exc}")
+        zip_bytes = st.session_state.get("family_zip_bytes")
+        if zip_bytes and st.session_state.get("family_zip_ok"):
+            st.download_button(
+                "Скачать все начертания (ZIP)",
+                data=zip_bytes,
+                file_name="Compresso_Family_Pack.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key=f"styles_dl_zip_{len(zip_bytes)}",
+            )
+
+    with exp_col3:
+        st.download_button(
+            "Скачать пресеты (JSON)",
+            data=presets_library_to_json(
+                all_profiles,
+                active=str(st.session_state.get("current_preset_name") or "Regular"),
+            ).encode("utf-8"),
+            file_name="compresso-presets.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+    uploaded_presets = st.file_uploader(
+        "Загрузить пресеты (JSON)",
+        type=["json"],
+        key="presets_json_upload",
+    )
+    if uploaded_presets is not None:
+        _import_presets_file(uploaded_presets)
+
+_persist_presets_to_browser()
