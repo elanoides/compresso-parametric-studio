@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 
 from engine.presets import (
     BUILTIN_PRESETS,
-    PROTECTED_FROM_DELETE,
+    DEFAULT_PRESET_NAMES,
     apply_profile_to_session,
     canonical_preset_name,
     ensure_presets_store,
@@ -111,7 +111,6 @@ THEME: dict[str, str] = {
 
 st.set_page_config(
     page_title="Compresso Parametric Studio",
-    page_icon="▣",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -398,14 +397,11 @@ def _render_params_from_profile(profile: dict) -> RenderParams:
     )
 
 
-def _preset_summary(profile: dict) -> str:
-    mt = str(profile.get("module_type") or MODULE_OVAL)
-    module_label = MODULE_LABEL_BY_TYPE.get(mt, mt)
+def _preset_card_subtitle(profile: dict) -> str:
     return (
         f"rx {float(profile.get('rx', 0)):.0f} · ry {float(profile.get('ry', 0)):.0f} · "
         f"∠ {float(profile.get('module_angle', 0)):.0f}° · "
-        f"step {float(profile.get('step_x', 0)):.0f}/{float(profile.get('step_y', 0)):.0f} · "
-        f"slant {float(profile.get('slant_angle', 0)):.0f}° · {module_label}"
+        f"slant {float(profile.get('slant_angle', 0)):.0f}°"
     )
 
 
@@ -453,10 +449,10 @@ def _create_new_preset() -> None:
     _push_live_command()
 
 
-def _delete_preset_by_name(name: str) -> None:
-    """Delete a preset by name (used from the styles tab)."""
+def _execute_preset_delete(name: str) -> None:
+    """Remove a user preset and fall back to Regular when needed."""
     target = str(name or "").strip()
-    if not target or target in PROTECTED_FROM_DELETE:
+    if not target or target in DEFAULT_PRESET_NAMES:
         return
     presets = dict(_all_presets())
     if target not in presets:
@@ -470,7 +466,31 @@ def _delete_preset_by_name(name: str) -> None:
     )
     _clear_render_cache()
     _push_live_command()
-    st.rerun()
+
+
+def _arm_preset_delete(name: str) -> None:
+    target = str(name or "").strip()
+    if not target or target in DEFAULT_PRESET_NAMES:
+        return
+    st.session_state["_preset_delete_target"] = target
+
+
+@st.dialog("Удаление начертания")
+def _delete_preset_dialog() -> None:
+    name = str(st.session_state.get("_preset_delete_target") or "")
+    st.markdown(
+        f'Вы точно хотите удалить начертание **"{name}"**? Это действие нельзя отменить.'
+    )
+    yes_col, no_col = st.columns(2)
+    with yes_col:
+        if st.button("Да, удалить", type="primary", use_container_width=True):
+            _execute_preset_delete(name)
+            st.session_state.pop("_preset_delete_target", None)
+            st.rerun()
+    with no_col:
+        if st.button("Отмена", use_container_width=True):
+            st.session_state.pop("_preset_delete_target", None)
+            st.rerun()
 
 
 def _import_presets_file(uploaded) -> None:
@@ -914,7 +934,7 @@ def _inject_mobile_sidebar() -> None:
             if (!sb) return;
             sb.classList.toggle("cps-mobile-open", open);
             backdrop?.classList.toggle("open", open);
-            if (btn) btn.textContent = open ? "✕ Закрыть" : "☰ Параметры";
+            if (btn) btn.textContent = open ? "Закрыть" : "Параметры";
           }
 
           function toggle() {
@@ -937,7 +957,7 @@ def _inject_mobile_sidebar() -> None:
               btn = doc.createElement("button");
               btn.id = BTN_ID;
               btn.type = "button";
-              btn.textContent = "☰ Параметры";
+              btn.textContent = "Параметры";
               btn.addEventListener("click", toggle);
               doc.body.appendChild(btn);
             }
@@ -1269,14 +1289,14 @@ with tab_words:
                 r1.code(pair)
                 r2.write(f"{delta:+.2f} cols")
                 r3.button(
-                    "✎",
+                    "Править",
                     key=f"edit_kern_{pair}",
                     help="Подставить в редактор",
                     on_click=_load_kern_pair_into_editor,
                     args=(pair, float(delta)),
                 )
                 r4.button(
-                    "✕",
+                    "Удалить",
                     key=f"del_kern_{pair}",
                     use_container_width=True,
                     on_click=_delete_kern_pair,
@@ -1365,7 +1385,7 @@ with tab_inspect:
 with tab_styles:
     st.markdown("### Начертания")
     st.caption(
-        "Выберите начертание, загрузите его в редактор (сайдбар) или сохраните текущие ползунки. "
+        "Выберите начертание в списке — параметры сразу загрузятся в сайдбар. "
         "Библиотека синхронизируется с localStorage браузера."
     )
 
@@ -1376,52 +1396,32 @@ with tab_styles:
             st.session_state.get("current_preset_name") or "Regular"
         )
 
-    st.markdown("#### Активное начертание")
-    active_col, btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2.2, 1.2, 1.2, 1, 1])
-    with active_col:
+    pick_col, save_col, reset_col = st.columns([2.4, 1.3, 1.3])
+    with pick_col:
         st.selectbox(
             "Начертание",
             options=preset_names,
             key="styles_preset_select",
-            label_visibility="collapsed",
+            on_change=_apply_styles_preset_select,
+            label_visibility="visible",
         )
-    with btn_col1:
+    with save_col:
         st.button(
-            "Применить / Загрузить в редактор",
-            use_container_width=True,
-            type="primary",
-            on_click=_apply_styles_preset_select,
-        )
-    with btn_col2:
-        st.button(
-            "💾 Сохранить текущие параметры",
+            "Сохранить изменения",
             use_container_width=True,
             on_click=_update_current_preset,
             help="Перезаписать выбранное начертание значениями ползунков из сайдбара.",
         )
-    with btn_col3:
+    with reset_col:
         st.button(
-            "↺ Regular",
+            "Сбросить к Regular",
             use_container_width=True,
             on_click=_reset_to_regular,
-            help="Сбросить ползунки к Regular.",
-        )
-    with btn_col4:
-        _pick = str(st.session_state.get("styles_preset_select") or "Regular")
-        st.button(
-            "🗑",
-            use_container_width=True,
-            disabled=_pick in PROTECTED_FROM_DELETE,
-            on_click=_delete_preset_by_name,
-            args=(_pick,),
-            help="Удалить выбранное пользовательское начертание.",
+            help="Вернуть эталонные настройки Regular.",
         )
 
-    st.caption(
-        f"В редакторе сейчас: **{st.session_state.get('current_preset_name', 'Regular')}**"
-    )
+    st.caption(f"В редакторе: {st.session_state.get('current_preset_name', 'Regular')}")
 
-    st.markdown("#### Новое начертание")
     new_col1, new_col2 = st.columns([3, 1])
     with new_col1:
         st.text_input(
@@ -1432,31 +1432,53 @@ with tab_styles:
         )
     with new_col2:
         st.button(
-            "➕ Создать из текущих настроек",
+            "Создать из текущих настроек",
             use_container_width=True,
             on_click=_create_new_preset,
         )
 
-    st.markdown("#### Семейство — обзор")
+    st.markdown("#### Семейство")
     gallery_specimen = _to_all_caps(st.session_state.get("word_text")) or DEFAULT_PHRASE
     gallery_cols = st.columns(3)
     for idx, (pname, profile) in enumerate(all_profiles.items()):
         with gallery_cols[idx % 3]:
             is_active = pname == st.session_state.get("current_preset_name")
-            st.markdown(f"{'**● ' if is_active else ''}{pname}**")
-            try:
-                preview_svg = _preset_preview_svg(profile, gallery_specimen)
-                show_svg(preview_svg, height=100, scale=0.28, fit="contain")
-            except Exception as exc:  # noqa: BLE001
-                st.caption(f"Превью: {exc}")
-            st.caption(_preset_summary(profile))
-            st.button(
-                "Загрузить в редактор",
-                key=f"gallery_apply_{pname}",
-                use_container_width=True,
-                on_click=_apply_preset_by_name,
-                args=(pname,),
-            )
+            with st.container(border=True):
+                head_left, head_right = st.columns([3, 1])
+                with head_left:
+                    st.subheader(pname, divider=False)
+                with head_right:
+                    if is_active:
+                        st.caption("Активно")
+                try:
+                    preview_svg = _preset_preview_svg(profile, gallery_specimen)
+                    show_svg(preview_svg, height=112, scale=0.28, fit="contain")
+                except Exception as exc:  # noqa: BLE001
+                    st.caption(f"Превью недоступно: {exc}")
+                st.caption(_preset_card_subtitle(profile))
+                load_col, del_col = st.columns([3, 1])
+                with load_col:
+                    st.button(
+                        "Загрузить в редактор",
+                        key=f"gallery_apply_{pname}",
+                        use_container_width=True,
+                        on_click=_apply_preset_by_name,
+                        args=(pname,),
+                    )
+                with del_col:
+                    is_builtin = pname in DEFAULT_PRESET_NAMES
+                    st.button(
+                        "Удалить",
+                        key=f"gallery_del_{pname}",
+                        use_container_width=True,
+                        disabled=is_builtin,
+                        on_click=_arm_preset_delete,
+                        args=(pname,),
+                        help="Удалить пользовательское начертание." if not is_builtin else "Системное начертание.",
+                    )
+
+    if st.session_state.get("_preset_delete_target"):
+        _delete_preset_dialog()
 
     st.divider()
     st.markdown("#### Экспорт и импорт")
