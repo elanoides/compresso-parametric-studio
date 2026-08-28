@@ -397,14 +397,6 @@ def _render_params_from_profile(profile: dict) -> RenderParams:
     )
 
 
-def _preset_card_subtitle(profile: dict) -> str:
-    return (
-        f"rx {float(profile.get('rx', 0)):.0f} · ry {float(profile.get('ry', 0)):.0f} · "
-        f"∠ {float(profile.get('module_angle', 0)):.0f}° · "
-        f"slant {float(profile.get('slant_angle', 0)):.0f}°"
-    )
-
-
 def _preset_preview_svg(profile: dict, specimen: str) -> str:
     params = _render_params_from_profile(profile)
     return render_text_svg(specimen, params)
@@ -828,6 +820,24 @@ def _inject_app_theme() -> None:
           }}
           div[data-testid="stVerticalBlockBorderWrapper"] {{
             background: transparent;
+          }}
+          span.cps-preset-active-anchor + div[data-testid="stVerticalBlockBorderWrapper"] {{
+            border: 1px solid #00FF66 !important;
+            box-shadow: 0 0 0 1px #00FF66, 0 0 12px rgba(0, 255, 102, 0.22);
+            position: relative;
+          }}
+          span.cps-preset-active-anchor + div[data-testid="stVerticalBlockBorderWrapper"]::after {{
+            content: "";
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #00FF66;
+            box-shadow: 0 0 8px #00FF66;
+            pointer-events: none;
+            z-index: 2;
           }}
           @media (max-width: 768px) {{
             h1 {{ font-size: 1.35rem !important; }}
@@ -1396,14 +1406,16 @@ with tab_styles:
             st.session_state.get("current_preset_name") or "Regular"
         )
 
-    pick_col, save_col, reset_col = st.columns([2.4, 1.3, 1.3])
+    pick_col, save_col, reset_col = st.columns(
+        [2.4, 1.3, 1.3], vertical_alignment="bottom"
+    )
     with pick_col:
         st.selectbox(
             "Начертание",
             options=preset_names,
             key="styles_preset_select",
             on_change=_apply_styles_preset_select,
-            label_visibility="visible",
+            label_visibility="collapsed",
         )
     with save_col:
         st.button(
@@ -1443,20 +1455,19 @@ with tab_styles:
     for idx, (pname, profile) in enumerate(all_profiles.items()):
         with gallery_cols[idx % 3]:
             is_active = pname == st.session_state.get("current_preset_name")
+            if is_active:
+                st.markdown(
+                    '<span class="cps-preset-active-anchor" aria-hidden="true"></span>',
+                    unsafe_allow_html=True,
+                )
             with st.container(border=True):
-                head_left, head_right = st.columns([3, 1])
-                with head_left:
-                    st.subheader(pname, divider=False)
-                with head_right:
-                    if is_active:
-                        st.caption("Активно")
+                st.subheader(pname, divider=False)
                 try:
                     preview_svg = _preset_preview_svg(profile, gallery_specimen)
                     show_svg(preview_svg, height=112, scale=0.28, fit="contain")
                 except Exception as exc:  # noqa: BLE001
                     st.caption(f"Превью недоступно: {exc}")
-                st.caption(_preset_card_subtitle(profile))
-                load_col, del_col = st.columns([3, 1])
+                load_col, del_col = st.columns([4, 1])
                 with load_col:
                     st.button(
                         "Загрузить в редактор",
@@ -1468,13 +1479,15 @@ with tab_styles:
                 with del_col:
                     is_builtin = pname in DEFAULT_PRESET_NAMES
                     st.button(
-                        "Удалить",
+                        "🗑",
                         key=f"gallery_del_{pname}",
                         use_container_width=True,
                         disabled=is_builtin,
                         on_click=_arm_preset_delete,
                         args=(pname,),
-                        help="Удалить пользовательское начертание." if not is_builtin else "Системное начертание.",
+                        help="Удалить начертание"
+                        if not is_builtin
+                        else "Системное начертание нельзя удалить.",
                     )
 
     if st.session_state.get("_preset_delete_target"):
