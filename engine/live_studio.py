@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,31 @@ _live_studio = components.declare_component(
     "cps_live_studio",
     path=str(_COMPONENT_DIR),
 )
+
+
+def _component_font_payload(params: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
+    """Strip font path dict from params; pass as JSON string (Streamlit-safe)."""
+    payload = dict(params)
+    font_paths_json = ""
+    font_alphabet = str(payload.pop("font_alphabet", "") or "")
+    font_paths = payload.pop("font_paths", None)
+    if isinstance(font_paths, dict) and font_paths:
+        font_paths_json = json.dumps(font_paths, ensure_ascii=False)
+    return payload, font_paths_json, font_alphabet
+
+
+def _component_command(command: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not command:
+        return None
+    cmd = dict(command)
+    params = dict(cmd.get("params") or {})
+    payload, font_paths_json, font_alphabet = _component_font_payload(params)
+    cmd["params"] = payload
+    if font_paths_json:
+        cmd["font_paths_json"] = font_paths_json
+    if font_alphabet:
+        cmd["font_alphabet"] = font_alphabet
+    return cmd
 
 
 def apply_live_params_to_session(session: Any, params: dict[str, Any]) -> None:
@@ -48,6 +74,7 @@ def live_studio(
     payload = dict(params or {})
     if kerning_pairs is not None:
         payload["kerning_pairs"] = kerning_pairs
+    payload, font_paths_json, font_alphabet = _component_font_payload(payload)
     return _live_studio(
         glyph_pack=glyph_pack_json(),
         preview_only=preview_only,
@@ -57,11 +84,13 @@ def live_studio(
         params=payload,
         module_type=str(payload.get("module_type") or "oval"),
         custom_svg_markup=str(payload.get("custom_svg_markup") or ""),
+        font_paths_json=font_paths_json,
+        font_alphabet=font_alphabet,
         kerning_pairs=kerning_pairs or payload.get("kerning_pairs") or {},
         show_guides=show_guides,
         show_grid=show_grid,
         preview_scale=preview_scale,
-        command=command,
+        command=_component_command(command),
         command_id=command_id,
         height=height,
         default=None,

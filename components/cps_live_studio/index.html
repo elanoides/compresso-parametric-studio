@@ -803,6 +803,39 @@
           return state.glyph || state.defaultGlyph || "А";
         }
 
+        function hasFontPaths(map) {
+          return !!map && typeof map === "object" && Object.keys(map).length > 0;
+        }
+
+        function parseFontPathsFromArgs(args) {
+          if (!args) return null;
+          const rawJson = args.font_paths_json
+            || (args.params && args.params.font_paths_json)
+            || "";
+          if (rawJson) {
+            try {
+              const parsed = JSON.parse(rawJson);
+              if (hasFontPaths(parsed)) return parsed;
+            } catch (err) {
+              /* ignore malformed payload */
+            }
+          }
+          if (args.params && hasFontPaths(args.params.font_paths)) {
+            return args.params.font_paths;
+          }
+          if (hasFontPaths(args.font_paths)) return args.font_paths;
+          return null;
+        }
+
+        function parseFontAlphabetFromArgs(args) {
+          if (!args) return "";
+          return String(
+            args.font_alphabet
+            || (args.params && args.params.font_alphabet)
+            || ""
+          );
+        }
+
         function mergeServerParams(args) {
           if (!args) return;
           const base = Object.assign({}, DEFAULTS, state.params, args.params || {});
@@ -819,9 +852,11 @@
             if (args.params.custom_svg_markup != null) {
               base.custom_svg_markup = args.params.custom_svg_markup;
             }
-            if (args.params.font_paths) base.font_paths = args.params.font_paths;
-            if (args.params.font_alphabet) base.font_alphabet = args.params.font_alphabet;
           }
+          const fontPaths = parseFontPathsFromArgs(args);
+          if (fontPaths) base.font_paths = fontPaths;
+          const fontAlphabet = parseFontAlphabetFromArgs(args);
+          if (fontAlphabet) base.font_alphabet = fontAlphabet;
           state.serverDeform = {
             jitter_x: base.jitter_x,
             row_jitter: base.row_jitter,
@@ -836,7 +871,7 @@
         function readAllFromParent() {
           const doc = window.parent.document;
           const keepMarkup = state.params.custom_svg_markup || "";
-          const keepFontPaths = state.params.font_paths || null;
+          const keepFontPaths = hasFontPaths(state.params.font_paths) ? state.params.font_paths : null;
           const keepAlphabet = state.params.font_alphabet || "";
           const lockedModuleType = state.params.module_type || "";
           const out = Object.assign({}, state.params);
@@ -1068,7 +1103,13 @@
 
         function applyCommand(cmd) {
           if (!cmd || !cmd.params) return;
-          mergeServerParams({ params: cmd.params, module_type: cmd.params.module_type, custom_svg_markup: cmd.params.custom_svg_markup });
+          mergeServerParams({
+            params: cmd.params,
+            module_type: cmd.params.module_type,
+            custom_svg_markup: cmd.params.custom_svg_markup,
+            font_paths_json: cmd.font_paths_json,
+            font_alphabet: cmd.font_alphabet,
+          });
           if (!state.previewOnly) writeParamsToDom(state.params);
           scheduleRender();
         }

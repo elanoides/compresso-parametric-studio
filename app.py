@@ -49,18 +49,22 @@ from engine.module_types import (
     MODULE_LABEL_BY_TYPE,
 )
 from engine.presets import (
-    BUILTIN_NAMES,
     BUILTIN_PRESETS,
-    GEOMETRY_KEYS,
+    DEFAULT_PRESET_NAMES,
+    PROTECTED_FROM_DELETE,
     apply_profile_to_session,
-    merge_profiles,
+    canonical_preset_name,
+    ensure_presets_store,
+    is_user_preset,
+    merge_imported_presets,
+    presets_library_to_json,
     profiles_from_json,
     snapshot_from_session,
 )
 from engine.render import render_glyph_svg, render_text_svg
 
 # ----- Regular (Default) -----
-REGULAR_VERSION = 12
+REGULAR_VERSION = 13
 REGULAR: dict[str, float | int | str | bool] = {
     "rx": 30.0,
     "ry": 10.0,
@@ -127,10 +131,10 @@ def _ensure_defaults() -> None:
         st.session_state.setdefault("kern_pair_in", "АВ")
         st.session_state.setdefault("kern_delta_in", -0.5)
         st.session_state["word_text"] = DEFAULT_PHRASE
-        st.session_state.setdefault("custom_presets", {})
-        st.session_state.setdefault("active_preset", "Regular")
-        st.session_state.setdefault("preset_name_in", "")
-        st.session_state.setdefault("preset_selector", "Regular")
+        st.session_state.setdefault("presets", {})
+        st.session_state.setdefault("current_preset_name", "Regular")
+        st.session_state.setdefault("new_preset_name", "")
+        ensure_presets_store(st.session_state)
         st.session_state.setdefault("word_show_guides", False)
         st.session_state.setdefault("word_show_grid", False)
         st.session_state.setdefault("inspect_show_guides", True)
@@ -153,10 +157,10 @@ def _ensure_defaults() -> None:
     st.session_state.setdefault("kern_pair_in", "АВ")
     st.session_state.setdefault("kern_delta_in", -0.5)
     st.session_state.setdefault("word_text", DEFAULT_PHRASE)
-    st.session_state.setdefault("custom_presets", {})
-    st.session_state.setdefault("active_preset", "Regular")
-    st.session_state.setdefault("preset_name_in", "")
-    st.session_state.setdefault("preset_selector", "Regular")
+    st.session_state.setdefault("presets", {})
+    st.session_state.setdefault("current_preset_name", "Regular")
+    st.session_state.setdefault("new_preset_name", "")
+    ensure_presets_store(st.session_state)
     st.session_state.setdefault("word_show_guides", False)
     st.session_state.setdefault("word_show_grid", False)
     st.session_state.setdefault("inspect_show_guides", True)
@@ -208,6 +212,13 @@ def _on_module_font_subfamily_change() -> None:
     weight = next(iter(weights))
     st.session_state["module_font_weight"] = weight
     st.session_state["module_font_file"] = weights[weight]
+    _bump_export_cache()
+    _push_live_command()
+
+
+def _on_module_font_weight_change() -> None:
+    """When weight changes, sync filename and refresh live preview paths."""
+    _sync_module_font_file_from_selectors()
     _bump_export_cache()
     _push_live_command()
 
@@ -303,68 +314,120 @@ def _resolved_font_style() -> str:
 
 
 def _all_presets() -> dict:
-    return merge_profiles(st.session_state.get("custom_presets") or {})
+    return ensure_presets_store(st.session_state)
 
 
-def _custom_preset_names() -> list[str]:
-    """Names stored in the user's custom_presets map (may shadow built-ins)."""
-    raw = st.session_state.get("custom_presets") or {}
-    return sorted(str(k).strip() for k in dict(raw) if str(k).strip())
+def _user_preset_names() -> list[str]:
+    presets = _all_presets()
+    return sorted(name for name in presets if is_user_preset(name, presets))
+
+
+def _sync_module_ui_from_profile() -> None:
+    """Keep module-type and font selectors aligned after loading a preset."""
+    _sync_module_type_label()
+    mt = str(st.session_state.get("module_type") or MODULE_OVAL)
+    if mt == MODULE_FONT:
+        _ensure_module_font_default()
+        _sync_module_font_file_from_selectors()
+    fill_order = str(st.session_state.get("module_font_fill_order") or "columns")
+    label = FILL_ORDER_LABELS[0] if fill_order == "columns" else FILL_ORDER_LABELS[1]
+    st.session_state["module_font_fill_order_label"] = label
+
+
+def _apply_preset_profile(name: str, profile: dict) -> None:
+    apply_profile_to_session(st.session_state, profile)
+    st.session_state["current_preset_name"] = name
+    st.session_state["font_style"] = name
+    _sync_module_ui_from_profile()
 
 
 def _on_preset_select() -> None:
-    _load_preset(str(st.session_state.get("preset_selector") or "Regular"))
+    name = str(st.session_state.get("current_preset_name") or "Regular")
+    presets = _all_presets()
+    profile = presets.get(name)
+    if not profile:
+        return
+    _apply_preset_profile(name, profile)
+    _clear_render_cache()
+    _push_live_command()
+
+
+def _load_preset(name: str) -> None:
+    """Apply a named preset to session_state."""
+    presets = _all_presets()
+    profile = presets.get(name)
+    if not profile:
+        return
+    _apply_preset_profile(name, profile)
+
+
+def _update_current_preset() -> None:
+    """Overwrite the active preset with current slider values."""
+    name = str(st.session_state.get("current_preset_name") or "Regular").strip()
+    if not name:
+        return
+    presets = dict(_all_presets())
+    presets[name] = snapshot_from_session(dict(st.session_state))
+    st.session_state["presets"] = presets
+    st.session_state["font_style"] = name
+    _clear_render_cache()
+    _push_live_command()
+
+
+def _create_new_preset() -> None:
+    """Save current settings under a new preset name."""
+    name = str(st.session_state.get("new_preset_name") or "").strip()
+    if not name:
+        return
+    presets = dict(_all_presets())
+    presets[name] = snapshot_from_session(dict(st.session_state))
+    st.session_state["presets"] = presets
+    st.session_state["current_preset_name"] = name
+    st.session_state["font_style"] = name
+    st.session_state["new_preset_name"] = ""
+    _clear_render_cache()
+    _push_live_command()
+
+
+def _delete_preset_by_name(name: str) -> None:
+    """Delete a preset by name (used from the styles tab)."""
+    target = str(name or "").strip()
+    if not target or target in PROTECTED_FROM_DELETE:
+        return
+    presets = dict(_all_presets())
+    if target not in presets:
+        return
+    presets.pop(target, None)
+    st.session_state["presets"] = presets
+    if str(st.session_state.get("current_preset_name") or "") == target:
+        _load_preset("Regular")
     _clear_render_cache()
     _push_live_command()
     st.rerun()
 
 
-def _load_preset(name: str) -> None:
-    """Callback: apply a named preset's geometry/FX — keep user's ink colors."""
-    profiles = merge_profiles(st.session_state.get("custom_presets") or {})
-    profile = profiles.get(name)
-    if not profile:
+def _delete_current_preset() -> None:
+    """Remove the active user preset (Regular is protected)."""
+    _delete_preset_by_name(str(st.session_state.get("current_preset_name") or ""))
+
+
+def _import_presets_file(uploaded) -> None:
+    """Merge presets from an uploaded JSON file."""
+    upload_id = f"{uploaded.name}:{uploaded.size}:{getattr(uploaded, 'file_id', '')}"
+    if st.session_state.get("_presets_import_id") == upload_id:
         return
-    apply_profile_to_session(st.session_state, profile, keys=GEOMETRY_KEYS)
-    st.session_state["active_preset"] = name
-    st.session_state["preset_selector"] = name
-    st.session_state["font_style"] = name
-    st.session_state["preset_name_in"] = name if name in _custom_preset_names() else ""
-
-
-def _save_current_preset() -> None:
-    """Callback: save/overwrite current settings under preset_name_in."""
-    name = str(st.session_state.get("preset_name_in") or "").strip()
-    if not name:
-        name = str(st.session_state.get("font_style") or "").strip()
-    if not name:
+    try:
+        imported, active = profiles_from_json(uploaded.getvalue())
+    except (ValueError, json.JSONDecodeError) as exc:
+        st.session_state["_presets_import_error"] = str(exc)
+        st.session_state["_presets_import_id"] = upload_id
         return
-    if name in BUILTIN_NAMES:
-        # Keep built-in names reserved — require a distinct custom label.
-        name = f"{name} Custom"
-    customs = dict(st.session_state.get("custom_presets") or {})
-    customs[name] = snapshot_from_session(dict(st.session_state))
-    st.session_state["custom_presets"] = customs
-    st.session_state["active_preset"] = name
-    st.session_state["preset_selector"] = name
-    st.session_state["font_style"] = name
-    st.session_state["preset_name_in"] = name
-
-
-def _delete_custom_preset(name: str | None = None) -> None:
-    """Remove a custom preset by name (or the current selector if custom)."""
-    target = (name if name is not None else str(st.session_state.get("preset_selector") or "")).strip()
-    customs = dict(st.session_state.get("custom_presets") or {})
-    if not target or target not in customs:
-        return
-    customs.pop(target, None)
-    st.session_state["custom_presets"] = customs
-    active = str(st.session_state.get("active_preset") or "")
-    selected = str(st.session_state.get("preset_selector") or "")
-    if active == target or selected == target:
-        st.session_state["active_preset"] = "Regular"
-        st.session_state["preset_name_in"] = ""
-        _load_preset("Regular")
+    merged = merge_imported_presets(_all_presets(), imported)
+    st.session_state["presets"] = merged
+    st.session_state["_presets_import_id"] = upload_id
+    st.session_state.pop("_presets_import_error", None)
+    if active and active in merged:
+        _load_preset(active)
     _clear_render_cache()
     _push_live_command()
     st.rerun()
@@ -397,14 +460,17 @@ def _apply_ink_defaults() -> None:
 
 
 def _reset_to_regular() -> None:
-    """Callback: write Regular values into session_state before widgets render."""
-    apply_profile_to_session(st.session_state, BUILTIN_PRESETS["Regular"])
+    """Callback: restore canonical Regular preset and apply it."""
+    canonical = BUILTIN_PRESETS["Regular"]
+    apply_profile_to_session(st.session_state, canonical)
     _apply_ink_defaults()
+    presets = dict(_all_presets())
+    presets["Regular"] = snapshot_from_session(dict(st.session_state))
+    st.session_state["presets"] = presets
     st.session_state["_regular_version"] = REGULAR_VERSION
-    st.session_state["active_preset"] = "Regular"
-    st.session_state["preset_selector"] = "Regular"
+    st.session_state["current_preset_name"] = "Regular"
     st.session_state["font_style"] = "Regular"
-    st.session_state["preset_name_in"] = ""
+    _sync_module_ui_from_profile()
     _clear_render_cache()
     _push_live_command()
     st.rerun()
@@ -847,7 +913,7 @@ def _inject_mobile_sidebar() -> None:
 
 
 def _hydrate_presets_from_browser() -> None:
-    """Restore custom presets from browser localStorage (once per session)."""
+    """Restore presets from browser localStorage (once per session)."""
     if st.session_state.get("_presets_ls_ready"):
         return
     blob = load_presets_blob()
@@ -857,37 +923,45 @@ def _hydrate_presets_from_browser() -> None:
         if attempts <= 8:
             st.caption("Синхронизация пресетов с браузером…")
             st.stop()
-        # Bridge did not answer — continue without stored presets.
         blob = {"presets": {}, "active": None}
 
     raw_presets = blob.get("presets") if isinstance(blob, dict) else {}
     try:
-        customs, _ = profiles_from_json(
+        imported, _ = profiles_from_json(
             json.dumps({"presets": raw_presets or {}, "active": blob.get("active")})
         )
     except Exception:  # noqa: BLE001
-        customs = {}
-    st.session_state["custom_presets"] = customs
+        imported = {}
+
+    store = ensure_presets_store(st.session_state)
+    if imported:
+        st.session_state["presets"] = merge_imported_presets(store, imported)
+
     active = blob.get("active") if isinstance(blob, dict) else None
-    if active and str(active) in merge_profiles(customs):
-        st.session_state["_pending_preset"] = str(active)
+    active_canon = canonical_preset_name(str(active)) if active else None
+    if active_canon and active_canon in _all_presets():
+        st.session_state["_pending_preset"] = active_canon
     st.session_state["_presets_ls_ready"] = True
     st.session_state["_presets_ls_nonce"] = 0
     st.session_state["_presets_ls_last"] = json.dumps(
-        {"format": "compresso-presets-v1", "active": active, "presets": customs},
+        {
+            "format": "compresso-presets-v2",
+            "active": active,
+            "presets": st.session_state.get("presets") or {},
+        },
         ensure_ascii=False,
         sort_keys=True,
     )
 
 
 def _persist_presets_to_browser() -> None:
-    """Autosave custom presets (+ active name) into localStorage."""
+    """Autosave preset library (+ active name) into localStorage."""
     if not st.session_state.get("_presets_ls_ready"):
         return
     payload = {
-        "format": "compresso-presets-v1",
-        "active": st.session_state.get("active_preset"),
-        "presets": st.session_state.get("custom_presets") or {},
+        "format": "compresso-presets-v2",
+        "active": st.session_state.get("current_preset_name"),
+        "presets": st.session_state.get("presets") or {},
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     if raw == st.session_state.get("_presets_ls_last"):
@@ -908,33 +982,55 @@ _inject_mobile_sidebar()
 
 pending = st.session_state.pop("_pending_preset", None)
 if pending:
-    _load_preset(str(pending))
+    _load_preset(canonical_preset_name(str(pending)))
+    _push_live_command()
 
 _ensure_ink_colors()
 
 st.title("Compresso Parametric Studio")
 
 with st.sidebar:
-    st.markdown("### Текущее начертание")
-    st.text_input(
-        "Имя для TTF",
-        key="font_style",
-        placeholder="Regular",
-        help="Попадёт в name table экспортируемого шрифта.",
-    )
-    st.caption(f"Сейчас: **{_resolved_font_style()}**")
+    st.markdown("### Начертания")
 
-    st.text_input(
-        "Имя начертания",
-        key="preset_name_in",
-        placeholder="My Ultra Slant",
-        help="Имя для сохранения пользовательского пресета.",
+    _preset_store = _all_presets()
+    _preset_names = list(_preset_store.keys())
+    if st.session_state.get("current_preset_name") not in _preset_names:
+        st.session_state["current_preset_name"] = "Regular"
+
+    st.selectbox(
+        "Начертание",
+        options=_preset_names,
+        key="current_preset_name",
+        on_change=_on_preset_select,
     )
+
     st.button(
-        "Сохранить текущее",
+        "💾 Сохранить изменения",
         use_container_width=True,
         type="primary",
-        on_click=_save_current_preset,
+        on_click=_update_current_preset,
+        help="Перезаписать параметры выбранного начертания текущими значениями ползунков.",
+    )
+
+    st.text_input(
+        "Новое начертание",
+        key="new_preset_name",
+        placeholder="Например: Ultra Bold 45",
+    )
+    st.button(
+        "➕ Создать начертание",
+        use_container_width=True,
+        on_click=_create_new_preset,
+    )
+
+    _current = str(st.session_state.get("current_preset_name") or "Regular")
+    _can_delete = _current not in PROTECTED_FROM_DELETE
+    st.button(
+        "🗑 Удалить",
+        use_container_width=True,
+        disabled=not _can_delete,
+        on_click=_delete_current_preset,
+        help="Regular нельзя удалить.",
     )
     st.button(
         "Сбросить к Regular",
@@ -942,18 +1038,43 @@ with st.sidebar:
         on_click=_reset_to_regular,
     )
 
-    _all = _all_presets()
-    _preset_names = list(_all.keys())
-    if st.session_state.get("preset_selector") not in _preset_names:
-        st.session_state["preset_selector"] = "Regular"
-        st.session_state["active_preset"] = "Regular"
-    st.selectbox(
-        "Начертание",
-        options=_preset_names,
-        key="preset_selector",
-        on_change=_on_preset_select,
+    import_err = st.session_state.pop("_presets_import_error", None)
+    if import_err:
+        st.error(f"Импорт пресетов: {import_err}")
+
+    json_col1, json_col2 = st.columns(2)
+    with json_col1:
+        st.download_button(
+            "Скачать JSON",
+            data=presets_library_to_json(
+                _all_presets(),
+                active=str(st.session_state.get("current_preset_name") or "Regular"),
+            ).encode("utf-8"),
+            file_name="compresso-presets.json",
+            mime="application/json",
+            use_container_width=True,
+            help="Выгрузить всю библиотеку начертаний.",
+        )
+    with json_col2:
+        uploaded_presets = st.file_uploader(
+            "JSON",
+            type=["json"],
+            key="presets_json_upload",
+            label_visibility="collapsed",
+            help="Загрузить библиотеку начертаний из файла.",
+        )
+    if uploaded_presets is not None:
+        _import_presets_file(uploaded_presets)
+
+    st.divider()
+    st.markdown("### Экспорт TTF")
+    st.text_input(
+        "Имя для TTF",
+        key="font_style",
+        placeholder="Regular",
+        help="Попадёт в name table экспортируемого шрифта.",
     )
-    st.caption(f"Активно: **{st.session_state.get('active_preset')}**")
+    st.caption(f"Сейчас: **{_resolved_font_style()}**")
 
     with st.expander("Модуль", expanded=False):
         module_label = st.radio(
@@ -1010,6 +1131,7 @@ with st.sidebar:
                     "Толщина",
                     weight_names,
                     key="module_font_weight",
+                    on_change=_on_module_font_weight_change,
                 )
                 _sync_module_font_file_from_selectors()
             else:
@@ -1324,33 +1446,33 @@ with tab_inspect:
         )
 
 with tab_styles:
-    st.markdown("### Сохранённые начертания")
+    st.markdown("### Библиотека начертаний")
     st.caption(
-        "Выбор начертания — в боковом меню. Здесь можно удалить свои пресеты "
-        "(они хранятся в localStorage браузера)."
+        "Выбор и редактирование — в боковом меню. Пользовательские начертания "
+        "сохраняются в localStorage браузера и в JSON-файл."
     )
 
     all_profiles = _all_presets()
     preset_names = list(all_profiles.keys())
 
-    st.markdown("**Встроенные**")
-    st.caption(", ".join(n for n in preset_names if n in BUILTIN_NAMES) or "—")
+    st.markdown("**Базовые**")
+    st.caption(", ".join(n for n in preset_names if n in DEFAULT_PRESET_NAMES) or "—")
 
     st.markdown("**Ваши**")
-    custom_names = _custom_preset_names()
+    custom_names = _user_preset_names()
     if not custom_names:
-        st.caption("Пока нет — сохраните из бокового меню.")
+        st.caption("Пока нет — создайте через «➕ Создать начертание» в боковом меню.")
     else:
         for cname in custom_names:
             row_l, row_r = st.columns([5, 1])
             with row_l:
-                is_active = cname == st.session_state.get("active_preset")
+                is_active = cname == st.session_state.get("current_preset_name")
                 st.write(f"{'● ' if is_active else ''}{cname}")
             with row_r:
                 st.button(
                     "Удалить",
                     key=f"del_preset_{cname}",
                     use_container_width=True,
-                    on_click=_delete_custom_preset,
+                    on_click=_delete_preset_by_name,
                     args=(cname,),
                 )
