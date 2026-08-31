@@ -1,5 +1,18 @@
+import { useMemo } from 'react';
+
+import { SvgCanvas } from '../SvgCanvas';
 import { Tabs } from './Tabs';
-import type { TabId } from '../../types/fontTypes';
+import { REGULAR_PARAMS } from '../../data/presets';
+import { renderTextSvg } from '../../engine/geometry';
+import type { RenderContext, TabId } from '../../types/fontTypes';
+
+const TITLE = 'COMPRESSO PARAMETRIC FONT STUDIO';
+
+const TITLE_CONTEXT: RenderContext = {
+  params: REGULAR_PARAMS,
+  fontPaths: {},
+  fontAlphabet: '',
+};
 
 interface HeaderProps {
   activeTab: TabId;
@@ -14,13 +27,25 @@ export function Header({
   activePreset,
   presetCount,
 }: HeaderProps) {
+  const titleSvg = useMemo(
+    () =>
+      renderTextSvg(TITLE, TITLE_CONTEXT, 1, {
+        paintBackground: false,
+        contain: true,
+      }),
+    [],
+  );
+
   return (
     <header className="flex shrink-0 flex-col gap-2 border-b border-studio-border bg-studio-bg px-4 pt-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="text-[15px] font-semibold tracking-tight text-studio-text">
-          Compresso Parametric Font Studio
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="min-w-0 flex-1">
+          <span className="sr-only">Compresso Parametric Font Studio</span>
+          <div className="h-16 max-w-[1100px]">
+            <SvgCanvas svg={titleSvg} fluid />
+          </div>
         </h1>
-        <p className="font-mono text-[11px] text-studio-faint">
+        <p className="shrink-0 font-mono text-[11px] text-studio-faint">
           Активное начертание: <span className="text-studio-muted">{activePreset}</span>
           {' · '}
           {presetCount} в библиотеке

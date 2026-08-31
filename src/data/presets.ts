@@ -76,6 +76,7 @@ export function resolveSpecimen(text: string): string {
   const trimmed = text.trim();
   return trimmed.length > 0 ? trimmed : DEFAULT_PHRASE;
 }
+
 export const DEFAULT_INSPECT_CHAR = 'А';
 
 export function freshPresetLibrary(): Record<string, StyleParams> {

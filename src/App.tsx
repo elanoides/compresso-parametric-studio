@@ -58,7 +58,6 @@ export default function App() {
             <PresetsGallery
               presets={studio.presets}
               activePreset={studio.activePreset}
-              specimen={studio.wordText}
               context={studio.context}
               onApply={studio.applyPreset}
               onSave={studio.saveActivePreset}

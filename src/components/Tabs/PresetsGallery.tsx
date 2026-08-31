@@ -6,9 +6,9 @@ import { Modal } from '../Modal';
 import { SvgCanvas } from '../SvgCanvas';
 import {
   BUILTIN_PRESET_NAMES,
+  DEFAULT_PHRASE,
   presetsFromJson,
   presetsToJson,
-  resolveSpecimen,
 } from '../../data/presets';
 import { downloadFont, downloadJson, downloadSvg, readTextFile } from '../../engine/download';
 import { FONT_FAMILY, styleSlug } from '../../engine/fontNaming';
@@ -26,7 +26,6 @@ const IDLE_CARD_COLORS = { fill: '#FFFFFF', stroke: '#FFFFFF', background: '#0C0
 interface PresetsGalleryProps {
   presets: Record<string, StyleParams>;
   activePreset: string;
-  specimen: string;
   context: RenderContext;
   onApply: (name: string) => void;
   onSave: () => void;
@@ -40,7 +39,6 @@ interface PresetsGalleryProps {
 export function PresetsGallery({
   presets,
   activePreset,
-  specimen,
   context,
   onApply,
   onSave,
@@ -57,11 +55,6 @@ export function PresetsGallery({
   const importRef = useRef<HTMLInputElement>(null);
 
   const names = useMemo(() => Object.keys(presets), [presets]);
-  const resolvedSpecimen = resolveSpecimen(specimen);
-  const cardSpecimen = useMemo(
-    () => resolvedSpecimen.slice(0, 4),
-    [resolvedSpecimen],
-  );
 
   const handleCreate = useCallback(() => {
     const error = onCreate(newName);
@@ -128,10 +121,10 @@ export function PresetsGallery({
   }, [onDelete, pendingDelete]);
 
   const exportSvg = useCallback(() => {
-    const full = renderTextSvg(resolvedSpecimen, context, 1);
+    const full = renderTextSvg(DEFAULT_PHRASE, context, 1);
     downloadSvg(full, `${styleSlug(activePreset)}-specimen.svg`);
     setMessage('SVG сохранён');
-  }, [activePreset, context, resolvedSpecimen]);
+  }, [activePreset, context]);
 
   const exportFont = useCallback(async () => {
     setBusy(true);
@@ -165,7 +158,7 @@ export function PresetsGallery({
       );
       const blob = await buildFamilyPack(presets, {
         family: FONT_FAMILY,
-        specimen: resolvedSpecimen,
+        specimen: DEFAULT_PHRASE,
         onProgress: (done, total, styleName) => {
           setMessage(`Начертание ${done} из ${total}: ${styleName}`);
         },
@@ -179,7 +172,7 @@ export function PresetsGallery({
     } finally {
       setBusy(false);
     }
-  }, [presets, resolvedSpecimen]);
+  }, [presets]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -220,7 +213,7 @@ export function PresetsGallery({
               key={name}
               name={name}
               params={presets[name]}
-              specimen={cardSpecimen}
+              specimen={DEFAULT_PHRASE}
               active={name === activePreset}
               deletable={!BUILTIN_PRESET_NAMES.includes(name)}
               onApply={onApply}
