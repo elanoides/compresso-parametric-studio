@@ -28,6 +28,7 @@ export default function App() {
           onApplyPreset={studio.applyPreset}
           onSavePreset={studio.saveActivePreset}
           onResetPreset={studio.resetToRegular}
+          onCreatePreset={studio.createPreset}
         />
 
         <main className="min-w-0 flex-1 overflow-hidden p-4">
@@ -36,7 +37,6 @@ export default function App() {
           {studio.tab === 'word' ? (
             <WordTester
               context={studio.context}
-              presets={studio.presets}
               activePreset={studio.activePreset}
               text={studio.wordText}
               onTextChange={studio.setWordText}
@@ -59,9 +59,11 @@ export default function App() {
               presets={studio.presets}
               activePreset={studio.activePreset}
               specimen={studio.wordText}
+              context={studio.context}
               onApply={studio.applyPreset}
               onSave={studio.saveActivePreset}
               onCreate={studio.createPreset}
+              onCreateDefault={studio.createDefaultPreset}
               onDelete={studio.deletePreset}
               onReset={studio.resetToRegular}
               onImport={studio.replaceLibrary}

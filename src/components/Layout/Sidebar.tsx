@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import { Accordion } from './Accordion';
 import { Button } from '../controls/Button';
-import { Checkbox, ColorField, FieldLabel, RadioGroup, Select, TextField } from '../controls/Inputs';
+import { Checkbox, ColorField, Combobox, FieldLabel, RadioGroup, Select, TextField } from '../controls/Inputs';
 import { Slider } from '../controls/Slider';
 import { MODULE_FONT_SUBFAMILIES, weightsForSubfamily } from '../../data/moduleFontCatalog';
 import { parseCustomSvg, serializeStamp } from '../../engine/moduleStamp';
@@ -40,6 +40,7 @@ interface SidebarProps {
   onApplyPreset: (name: string) => void;
   onSavePreset: () => void;
   onResetPreset: () => void;
+  onCreatePreset: (name: string) => string | null;
 }
 
 export function Sidebar({
@@ -52,26 +53,32 @@ export function Sidebar({
   onApplyPreset,
   onSavePreset,
   onResetPreset,
+  onCreatePreset,
 }: SidebarProps) {
   return (
-    <aside className="flex w-[300px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-studio-border bg-studio-bg p-3">
-      <PresetDock
-        names={Object.keys(presets)}
-        activePreset={activePreset}
-        onApply={onApplyPreset}
-        onSave={onSavePreset}
-        onReset={onResetPreset}
-      />
-      <ModuleSection
-        params={params}
-        onChange={onChange}
-        fontLoading={fontLoading}
-        fontError={fontError}
-      />
-      <SpacingSection params={params} onChange={onChange} />
-      <DeformSection params={params} onChange={onChange} />
-      <KerningSection params={params} onChange={onChange} />
-      <ColorSection params={params} onChange={onChange} />
+    <aside className="flex w-[300px] shrink-0 flex-col border-r border-studio-border bg-studio-bg">
+      <div className="shrink-0 p-3 pb-2">
+        <PresetDock
+          names={Object.keys(presets)}
+          activePreset={activePreset}
+          onApply={onApplyPreset}
+          onSave={onSavePreset}
+          onReset={onResetPreset}
+          onCreate={onCreatePreset}
+        />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-3">
+        <ModuleSection
+          params={params}
+          onChange={onChange}
+          fontLoading={fontLoading}
+          fontError={fontError}
+        />
+        <SpacingSection params={params} onChange={onChange} />
+        <DeformSection params={params} onChange={onChange} />
+        <KerningSection params={params} onChange={onChange} />
+        <ColorSection params={params} onChange={onChange} />
+      </div>
     </aside>
   );
 }
@@ -89,20 +96,24 @@ function PresetDock({
   onApply,
   onSave,
   onReset,
+  onCreate,
 }: {
   names: readonly string[];
   activePreset: string;
   onApply: (name: string) => void;
   onSave: () => void;
   onReset: () => void;
+  onCreate: (name: string) => string | null;
 }) {
   return (
     <div className="rounded-lg border border-studio-border bg-studio-surface p-2.5">
-      <Select
+      <Combobox
         label="Начертание"
         value={activePreset}
         options={names}
-        onChange={onApply}
+        onSelect={onApply}
+        onCreate={onCreate}
+        placeholder="Найти или ввести имя"
       />
       <div className="mt-2 grid grid-cols-2 gap-1.5">
         <Button compact onClick={onSave} title="Перезаписать активное начертание текущими параметрами">

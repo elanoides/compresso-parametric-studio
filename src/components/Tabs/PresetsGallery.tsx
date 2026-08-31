@@ -4,13 +4,20 @@ import { Button } from '../controls/Button';
 import { Select, TextField } from '../controls/Inputs';
 import { Modal } from '../Modal';
 import { SvgCanvas } from '../SvgCanvas';
-import { BUILTIN_PRESET_NAMES, presetsFromJson, presetsToJson } from '../../data/presets';
-import { downloadJson, readTextFile } from '../../engine/download';
+import {
+  BUILTIN_PRESET_NAMES,
+  presetsFromJson,
+  presetsToJson,
+  resolveSpecimen,
+} from '../../data/presets';
+import { downloadFont, downloadJson, downloadSvg, readTextFile } from '../../engine/download';
+import { FONT_FAMILY, styleSlug } from '../../engine/fontNaming';
 import { renderTextSvg } from '../../engine/geometry';
 import { usePresetContext } from '../../hooks/usePresetContext';
-import type { StyleParams } from '../../types/fontTypes';
+import type { RenderContext, StyleParams } from '../../types/fontTypes';
+import { saveAs } from 'file-saver';
 
-const PRESETS_FILENAME = 'CRT_Font_Studio_Presets.json';
+const PRESETS_FILENAME = 'Compresso_Font_Studio_Presets.json';
 
 /** Card specimens use a light background when the card is active. */
 const ACTIVE_CARD_COLORS = { fill: '#000000', stroke: '#000000', background: '#FFFFFF' };
@@ -20,9 +27,11 @@ interface PresetsGalleryProps {
   presets: Record<string, StyleParams>;
   activePreset: string;
   specimen: string;
+  context: RenderContext;
   onApply: (name: string) => void;
   onSave: () => void;
   onCreate: (name: string) => string | null;
+  onCreateDefault: (name: string) => string | null;
   onDelete: (name: string) => void;
   onReset: () => void;
   onImport: (presets: Record<string, StyleParams>, active: string | null) => void;
@@ -32,23 +41,27 @@ export function PresetsGallery({
   presets,
   activePreset,
   specimen,
+  context,
   onApply,
   onSave,
   onCreate,
+  onCreateDefault,
   onDelete,
   onReset,
   onImport,
 }: PresetsGalleryProps) {
   const [newName, setNewName] = useState('');
   const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
   const names = useMemo(() => Object.keys(presets), [presets]);
-  const cardSpecimen = useMemo(() => {
-    const trimmed = specimen.trim();
-    return (trimmed || 'АБВ').slice(0, 4);
-  }, [specimen]);
+  const resolvedSpecimen = resolveSpecimen(specimen);
+  const cardSpecimen = useMemo(
+    () => resolvedSpecimen.slice(0, 4),
+    [resolvedSpecimen],
+  );
 
   const handleCreate = useCallback(() => {
     const error = onCreate(newName);
@@ -59,6 +72,16 @@ export function PresetsGallery({
     setMessage(`Начертание «${newName.trim()}» создано`);
     setNewName('');
   }, [newName, onCreate]);
+
+  const handleCreateDefault = useCallback(() => {
+    const error = onCreateDefault(newName);
+    if (error) {
+      setMessage(error);
+      return;
+    }
+    setMessage(`Начертание «${newName.trim()}» создано с настройками Regular`);
+    setNewName('');
+  }, [newName, onCreateDefault]);
 
   const handleSave = useCallback(() => {
     onSave();
@@ -104,6 +127,60 @@ export function PresetsGallery({
     }
   }, [onDelete, pendingDelete]);
 
+  const exportSvg = useCallback(() => {
+    const full = renderTextSvg(resolvedSpecimen, context, 1);
+    downloadSvg(full, `${styleSlug(activePreset)}-specimen.svg`);
+    setMessage('SVG сохранён');
+  }, [activePreset, context, resolvedSpecimen]);
+
+  const exportFont = useCallback(async () => {
+    setBusy(true);
+    setMessage('Сборка шрифта…');
+    try {
+      const { buildFontBinary } = await import('../../engine/opentypeExporter');
+      const font = buildFontBinary(context, {
+        family: FONT_FAMILY,
+        styleName: activePreset,
+      });
+      downloadFont(font.binary, font.filename);
+      setMessage(
+        `Шрифт собран: ${font.filename}` +
+          (font.kernPairCount > 0 ? ` · кернинг ${font.kernPairCount} пар` : ''),
+      );
+    } catch (error) {
+      setMessage(
+        `Ошибка сборки шрифта: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [activePreset, context]);
+
+  const exportFamily = useCallback(async () => {
+    setBusy(true);
+    setMessage('Сборка архива…');
+    try {
+      const { FAMILY_PACK_FILENAME, buildFamilyPack } = await import(
+        '../../engine/zipExporter'
+      );
+      const blob = await buildFamilyPack(presets, {
+        family: FONT_FAMILY,
+        specimen: resolvedSpecimen,
+        onProgress: (done, total, styleName) => {
+          setMessage(`Начертание ${done} из ${total}: ${styleName}`);
+        },
+      });
+      saveAs(blob, FAMILY_PACK_FILENAME);
+      setMessage(`Архив собран: ${FAMILY_PACK_FILENAME}`);
+    } catch (error) {
+      setMessage(
+        `Ошибка сборки архива: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [presets, resolvedSpecimen]);
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-studio-border bg-studio-surface p-3">
@@ -133,6 +210,7 @@ export function PresetsGallery({
         <Button variant="primary" onClick={handleCreate}>
           Создать из текущих настроек
         </Button>
+        <Button onClick={handleCreateDefault}>Создать с настройками по умолчанию</Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -153,8 +231,21 @@ export function PresetsGallery({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-studio-border pt-3">
-        <Button onClick={handleExport}>Скачать пресеты (JSON)</Button>
-        <Button onClick={() => importRef.current?.click()}>Загрузить пресеты (JSON)</Button>
+        <Button onClick={exportSvg} disabled={busy}>
+          Экспорт SVG
+        </Button>
+        <Button onClick={() => void exportFont()} disabled={busy} variant="primary">
+          Скачать шрифт (OTF)
+        </Button>
+        <Button onClick={() => void exportFamily()} disabled={busy}>
+          Экспорт семейства (ZIP)
+        </Button>
+        <Button onClick={handleExport} disabled={busy}>
+          Скачать пресеты (JSON)
+        </Button>
+        <Button onClick={() => importRef.current?.click()} disabled={busy}>
+          Загрузить пресеты (JSON)
+        </Button>
         <input
           ref={importRef}
           type="file"

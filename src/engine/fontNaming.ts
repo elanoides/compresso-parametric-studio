@@ -5,7 +5,7 @@
  * loading `opentype.js`.
  */
 
-export const FONT_FAMILY = 'CRT Parametric';
+export const FONT_FAMILY = 'Compresso Parametric';
 export const DEFAULT_STYLE_NAME = 'Regular';
 
 const WEIGHT_BY_TOKEN: ReadonlyArray<readonly [string, number]> = [

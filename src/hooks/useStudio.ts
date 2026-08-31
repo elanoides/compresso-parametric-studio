@@ -80,7 +80,8 @@ export interface Studio {
   activePreset: string;
   applyPreset: (name: string) => void;
   saveActivePreset: () => void;
-  createPreset: (name: string) => string | null;
+  createPreset: (name: string, source?: StyleParams) => string | null;
+  createDefaultPreset: (name: string) => string | null;
   deletePreset: (name: string) => void;
   replaceLibrary: (presets: Record<string, StyleParams>, active: string | null) => void;
   resetToRegular: () => void;
@@ -232,26 +233,33 @@ export function useStudio(): Studio {
   }, [activePreset, params]);
 
   const createPreset = useCallback(
-    (rawName: string): string | null => {
+    (rawName: string, source?: StyleParams): string | null => {
       const name = rawName.trim();
       if (!name) {
         return 'Введите имя начертания';
       }
+      const snapshot = { ...(source ?? params) };
       let conflict = false;
       setPresetsState((library) => {
         if (library[name]) {
           conflict = true;
           return library;
         }
-        return { ...library, [name]: { ...params } };
+        return { ...library, [name]: snapshot };
       });
       if (conflict) {
         return `Начертание «${name}» уже существует`;
       }
+      setParamsState(snapshot);
       setActivePreset(name);
       return null;
     },
     [params],
+  );
+
+  const createDefaultPreset = useCallback(
+    (rawName: string): string | null => createPreset(rawName, { ...REGULAR_PARAMS }),
+    [createPreset],
   );
 
   const deletePreset = useCallback((name: string) => {
@@ -312,6 +320,7 @@ export function useStudio(): Studio {
     applyPreset,
     saveActivePreset,
     createPreset,
+    createDefaultPreset,
     deletePreset,
     replaceLibrary,
     resetToRegular,

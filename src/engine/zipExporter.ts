@@ -12,8 +12,9 @@ import { renderGlyphSvg, renderTextSvg } from './geometry';
 import { styleSlug } from './fontNaming';
 import { buildFontBinary } from './opentypeExporter';
 import { resolveFontPathsFor } from './renderContext';
+import { resolveSpecimen } from '../data/presets';
 
-export const FAMILY_PACK_FILENAME = 'CRT_Font_Family_Pack.zip';
+export const FAMILY_PACK_FILENAME = 'Compresso_Parametric_Family_Pack.zip';
 
 export interface FamilyPackOptions {
   family: string;
@@ -53,7 +54,7 @@ export async function buildFamilyPack(
       zip.file(`${glyphFolder}/${glyphFileName(ch)}.svg`, renderGlyphSvg(ch, ctx));
     }
 
-    zip.file(`${folder}/specimen.svg`, renderTextSvg(options.specimen, ctx, 1));
+    zip.file(`${folder}/specimen.svg`, renderTextSvg(resolveSpecimen(options.specimen), ctx, 1));
     zip.file(`${folder}/params.json`, JSON.stringify(params, null, 2));
 
     try {

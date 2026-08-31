@@ -105,6 +105,113 @@ export function transformSegments(
   return out;
 }
 
+/** Split a path into subpaths that each start with `M`. */
+export function splitContours(segments: readonly PathSegment[]): PathSegment[][] {
+  const contours: PathSegment[][] = [];
+  let current: PathSegment[] = [];
+  for (const seg of segments) {
+    if (seg.type === 'M') {
+      if (current.length > 0) {
+        contours.push(current);
+      }
+      current = [seg];
+    } else {
+      current.push(seg);
+    }
+  }
+  if (current.length > 0) {
+    contours.push(current);
+  }
+  return contours;
+}
+
+function onCurvePoints(segments: readonly PathSegment[]): Array<[number, number]> {
+  const pts: Array<[number, number]> = [];
+  for (const seg of segments) {
+    if (seg.type === 'Z') {
+      continue;
+    }
+    pts.push([seg.x, seg.y]);
+  }
+  return pts;
+}
+
+/** Signed area in the path's own coordinate system (positive = CCW). */
+export function contourSignedArea(segments: readonly PathSegment[]): number {
+  const pts = onCurvePoints(segments);
+  if (pts.length < 3) {
+    return 0;
+  }
+  let area = 0;
+  for (let i = 0; i < pts.length; i += 1) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[(i + 1) % pts.length];
+    area += x0 * y1 - x1 * y0;
+  }
+  return area / 2;
+}
+
+function endPoint(seg: PathSegment): [number, number] | null {
+  if (seg.type === 'Z') {
+    return null;
+  }
+  return [seg.x, seg.y];
+}
+
+/** Reverse a single contour, preserving cubic/quad handles. */
+export function reverseContour(segments: readonly PathSegment[]): PathSegment[] {
+  const closed = segments.some((seg) => seg.type === 'Z');
+  const cmds = segments.filter((seg) => seg.type !== 'Z');
+  if (cmds.length === 0) {
+    return [...segments];
+  }
+  const last = cmds[cmds.length - 1];
+  const start = endPoint(last);
+  if (!start) {
+    return [...segments];
+  }
+  const out: PathSegment[] = [{ type: 'M', x: start[0], y: start[1] }];
+  for (let i = cmds.length - 1; i >= 1; i -= 1) {
+    const cmd = cmds[i];
+    const prev = cmds[i - 1];
+    const dest = endPoint(prev);
+    if (!dest) {
+      continue;
+    }
+    if (cmd.type === 'L' || cmd.type === 'M') {
+      out.push({ type: 'L', x: dest[0], y: dest[1] });
+    } else if (cmd.type === 'C') {
+      out.push({
+        type: 'C',
+        x1: cmd.x2,
+        y1: cmd.y2,
+        x2: cmd.x1,
+        y2: cmd.y1,
+        x: dest[0],
+        y: dest[1],
+      });
+    } else if (cmd.type === 'Q') {
+      out.push({ type: 'Q', x1: cmd.x1, y1: cmd.y1, x: dest[0], y: dest[1] });
+    }
+  }
+  if (closed) {
+    out.push({ type: 'Z' });
+  }
+  return out;
+}
+
+/**
+ * Force every contour to CCW (positive area) so holes fill instead of
+ * punching through neighbouring modules when all stamps share one glyph.
+ */
+export function unifyContourWinding(segments: readonly PathSegment[]): PathSegment[] {
+  const out: PathSegment[] = [];
+  for (const contour of splitContours(segments)) {
+    out.push(...(contourSignedArea(contour) < 0 ? reverseContour(contour) : contour));
+  }
+  return out;
+}
+
 function round(value: number, precision: number): string {
   const factor = 10 ** precision;
   const rounded = Math.round(value * factor) / factor;

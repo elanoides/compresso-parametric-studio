@@ -44,6 +44,7 @@ import {
   segmentsToPathData,
   transformSegments,
   translation,
+  unifyContourWinding,
 } from './svgPath';
 
 /** Fixed canvas margin around the glyph ink, in SVG units. */
@@ -459,7 +460,9 @@ export function layoutText(text: string, p: StyleParams): TextLayout {
   }
 
   if (cursor > 0) {
-    maxCol = Math.max(maxCol, cursor - p.letterSpacing - 1);
+    // Keep the trailing letter-spacing in the advance so SVG width matches
+    // the font's sidebearing, not just the last module's ink.
+    maxCol = Math.max(maxCol, cursor - 1);
   }
 
   if (modules.length === 0) {
@@ -499,8 +502,9 @@ export function canvasBoxFromModules(
     maxY = Math.max(maxY, cy + hh);
   }
 
+  const tracking = Math.max(0, p.letterSpacing) * p.stepX;
   return {
-    width: PADDING * 2 + (maxX - minX),
+    width: PADDING * 2 + (maxX - minX) + tracking,
     height: PADDING * 2 + (maxY - minY),
     originX: PADDING - minX,
     originY: PADDING - minY,
@@ -722,8 +726,8 @@ export function renderGlyphSvg(ch: string, ctx: RenderContext): string {
   const minRow = 0;
   const maxRow = ROWS_TOTAL - 1;
   const cols = isBlank(ch)
-    ? SPACE_WIDTH_COLS * Math.max(1, p.colScale)
-    : scaledWidth(ch, p.colScale);
+    ? SPACE_WIDTH_COLS * Math.max(1, p.colScale) + p.letterSpacing
+    : scaledWidth(ch, p.colScale) + p.letterSpacing;
   const box = canvasBox(p, Math.max(cols - 1, 0), minRow, maxRow);
 
   const parts: string[] = [
@@ -779,22 +783,24 @@ export function moduleOutlineSegments(
     applyRotation(ellipseSegments(cx, cy, p.rx * scale, p.ry * scale), cx, cy);
 
   if (p.moduleType === MODULE_OVAL) {
-    return oval();
+    return unifyContourWinding(oval());
   }
 
   if (p.moduleType === MODULE_CUSTOM_SVG) {
     const shape = deserializeStamp(p.customSvgMarkup);
     if (!shape) {
-      return oval();
+      return unifyContourWinding(oval());
     }
     const uniform = stampUniformScale(shape, p.rx * scale, p.ry * scale);
-    return applyRotation(
-      transformSegments(
-        shape.segments,
-        multiply(translation(cx, cy), scaling(uniform, -uniform)),
+    return unifyContourWinding(
+      applyRotation(
+        transformSegments(
+          shape.segments,
+          multiply(translation(cx, cy), scaling(uniform, -uniform)),
+        ),
+        cx,
+        cy,
       ),
-      cx,
-      cy,
     );
   }
 
@@ -813,7 +819,7 @@ export function moduleOutlineSegments(
       );
       out.push(...applyRotation(placed, cx, cy + dyFont));
     });
-    return out;
+    return unifyContourWinding(out);
   }
 
   return [];

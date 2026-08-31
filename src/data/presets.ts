@@ -70,6 +70,12 @@ export const BUILTIN_PRESET_NAMES: readonly string[] = Object.keys(DEFAULT_PRESE
 
 export const DEFAULT_PRESET_NAME = 'Regular';
 export const DEFAULT_PHRASE = 'НОБЕЛЬФАЙК';
+
+/** Specimen used for preview and export when the text field is empty. */
+export function resolveSpecimen(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.length > 0 ? trimmed : DEFAULT_PHRASE;
+}
 export const DEFAULT_INSPECT_CHAR = 'А';
 
 export function freshPresetLibrary(): Record<string, StyleParams> {

@@ -3,15 +3,14 @@ import { useCallback, useDeferredValue, useMemo, useState } from 'react';
 import { Button } from '../controls/Button';
 import { Slider } from '../controls/Slider';
 import { SvgCanvas } from '../SvgCanvas';
-import { saveAs } from 'file-saver';
-import { downloadFont, downloadSvg } from '../../engine/download';
-import { FONT_FAMILY, styleSlug } from '../../engine/fontNaming';
+import { resolveSpecimen } from '../../data/presets';
+import { downloadFont } from '../../engine/download';
+import { FONT_FAMILY } from '../../engine/fontNaming';
 import { renderTextSvg } from '../../engine/geometry';
-import type { RenderContext, StyleParams } from '../../types/fontTypes';
+import type { RenderContext } from '../../types/fontTypes';
 
 interface WordTesterProps {
   context: RenderContext;
-  presets: Record<string, StyleParams>;
   activePreset: string;
   text: string;
   onTextChange: (text: string) => void;
@@ -21,7 +20,6 @@ interface WordTesterProps {
 
 export function WordTester({
   context,
-  presets,
   activePreset,
   text,
   onTextChange,
@@ -31,27 +29,19 @@ export function WordTester({
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Deferring the heavy render keeps slider input at 60 FPS: React paints the
-  // thumb immediately and recomputes the SVG in an interruptible pass.
   const deferredContext = useDeferredValue(context);
   const deferredText = useDeferredValue(text);
   const deferredScale = useDeferredValue(previewScale);
+  const previewText = resolveSpecimen(deferredText);
 
   const svg = useMemo(
     () =>
-      renderTextSvg(deferredText, deferredContext, deferredScale, {
+      renderTextSvg(previewText, deferredContext, deferredScale, {
         paintBackground: false,
       }),
-    [deferredText, deferredContext, deferredScale],
+    [previewText, deferredContext, deferredScale],
   );
 
-  const exportSvg = useCallback(() => {
-    const full = renderTextSvg(text, context, 1);
-    downloadSvg(full, `${styleSlug(activePreset)}-specimen.svg`);
-    setStatus('SVG сохранён');
-  }, [activePreset, context, text]);
-
-  // The font tooling is a 300 kB chunk; it loads only when an export is asked for.
   const exportFont = useCallback(async () => {
     setBusy(true);
     setStatus('Сборка шрифта…');
@@ -74,31 +64,6 @@ export function WordTester({
       setBusy(false);
     }
   }, [activePreset, context]);
-
-  const exportFamily = useCallback(async () => {
-    setBusy(true);
-    setStatus('Сборка архива…');
-    try {
-      const { FAMILY_PACK_FILENAME, buildFamilyPack } = await import(
-        '../../engine/zipExporter'
-      );
-      const blob = await buildFamilyPack(presets, {
-        family: FONT_FAMILY,
-        specimen: text || 'НОБЕЛЬФАЙК',
-        onProgress: (done, total, styleName) => {
-          setStatus(`Начертание ${done} из ${total}: ${styleName}`);
-        },
-      });
-      saveAs(blob, FAMILY_PACK_FILENAME);
-      setStatus(`Архив собран: ${FAMILY_PACK_FILENAME}`);
-    } catch (error) {
-      setStatus(
-        `Ошибка сборки архива: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      setBusy(false);
-    }
-  }, [presets, text]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -136,14 +101,8 @@ export function WordTester({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={exportSvg} disabled={busy}>
-          Экспорт SVG
-        </Button>
         <Button onClick={() => void exportFont()} disabled={busy} variant="primary">
           Скачать шрифт (OTF)
-        </Button>
-        <Button onClick={() => void exportFamily()} disabled={busy}>
-          Экспорт семейства (ZIP)
         </Button>
         {status ? (
           <span className="font-mono text-[11px] text-studio-muted">{status}</span>
