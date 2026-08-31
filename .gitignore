@@ -1,15 +1,12 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-.env
-.streamlit/secrets.toml
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
 
 # Temp / local
 _tmp_*
-*.ttf.bak
 .DS_Store
 Thumbs.db
 
