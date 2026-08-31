@@ -21,7 +21,10 @@ export const SvgCanvas = memo(function SvgCanvas({
 }: SvgCanvasProps) {
   return (
     <div
-      className={`${className} ${fluid ? '[&>svg]:h-auto [&>svg]:w-full' : ''} [&>svg]:block [&>svg]:max-w-full`}
+      className={
+        `${className} [&>svg]:block ` +
+        (fluid ? 'h-full w-full [&>svg]:h-full [&>svg]:w-full' : '[&>svg]:max-w-full')
+      }
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );

@@ -465,13 +465,46 @@ export function layoutText(text: string, p: StyleParams): TextLayout {
   if (modules.length === 0) {
     minRow = 0;
     maxRow = ROWS_TOTAL - 1;
-  } else {
-    // Always reserve the accent and descender bands so nothing clips.
-    minRow = Math.min(minRow, 0);
-    maxRow = Math.max(maxRow, ROWS_TOTAL - 1);
   }
 
   return { modules, maxCol, minRow, maxRow };
+}
+
+/**
+ * Tight canvas around the actual ink after slant, jitter and module rotation.
+ * Origins are computed in a temporary (0, 0) space, then shifted so the
+ * leftmost/topmost ink sits `PADDING` inside the viewBox.
+ */
+export function canvasBoxFromModules(
+  p: StyleParams,
+  modules: readonly PlacedModule[],
+  minRow: number,
+  maxCol: number,
+  maxRow: number,
+): CanvasBox {
+  const [hw, hh] = moduleInkExtents(p);
+  if (modules.length === 0) {
+    return canvasBox(p, maxCol, minRow, maxRow);
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const m of modules) {
+    const [cx, cy] = transformedCenter(m.col, m.row, p, 0, 0, minRow, m.char);
+    minX = Math.min(minX, cx - hw);
+    maxX = Math.max(maxX, cx + hw);
+    minY = Math.min(minY, cy - hh);
+    maxY = Math.max(maxY, cy + hh);
+  }
+
+  return {
+    width: PADDING * 2 + (maxX - minX),
+    height: PADDING * 2 + (maxY - minY),
+    originX: PADDING - minX,
+    originY: PADDING - minY,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -586,12 +619,35 @@ function gridGhosts(
  * Renderers
  * ------------------------------------------------------------------ */
 
-function svgOpen(width: number, height: number, displayScale: number): string {
+export interface TextSvgOptions {
+  /** When false, the SVG is transparent so the host canvas shows through. */
+  paintBackground?: boolean;
+  /**
+   * Emit `width="100%" height="100%"` with `preserveAspectRatio="xMidYMid meet"`
+   * so the host box scales the whole inscription without cropping.
+   */
+  contain?: boolean;
+}
+
+function svgOpen(
+  width: number,
+  height: number,
+  displayScale: number,
+  contain = false,
+): string {
+  const viewBox = `0 0 ${f1(width)} ${f1(height)}`;
+  const aspect = 'preserveAspectRatio="xMidYMid meet"';
+  if (contain) {
+    return (
+      `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" ` +
+      `viewBox="${viewBox}" ${aspect}>`
+    );
+  }
   const w = width * displayScale;
   const h = height * displayScale;
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${f1(w)}" height="${f1(h)}" ` +
-    `viewBox="0 0 ${f1(width)} ${f1(height)}">`
+    `viewBox="${viewBox}" ${aspect}>`
   );
 }
 
@@ -600,15 +656,20 @@ export function renderTextSvg(
   text: string,
   ctx: RenderContext,
   displayScale = 1,
+  options?: TextSvgOptions,
 ): string {
   const p = ctx.params;
   const { modules, maxCol, minRow, maxRow } = layoutText(text, p);
-  const box = canvasBox(p, maxCol, minRow, maxRow);
+  const box = canvasBoxFromModules(p, modules, minRow, maxCol, maxRow);
+  const paintBackground = options?.paintBackground !== false;
+  const contain = options?.contain === true;
 
   const parts: string[] = [
-    svgOpen(box.width, box.height, Math.max(0.05, displayScale)),
-    `<rect width="100%" height="100%" fill="${p.background}"/>`,
+    svgOpen(box.width, box.height, Math.max(0.05, displayScale), contain),
   ];
+  if (paintBackground) {
+    parts.push(`<rect width="100%" height="100%" fill="${p.background}"/>`);
+  }
 
   const charMaps = new Map<string, Map<number, string[]>>();
   if (p.moduleType === MODULE_FONT) {

@@ -23,6 +23,11 @@ export default function App() {
           onChange={studio.updateParams}
           fontLoading={studio.fontLoading}
           fontError={studio.fontError}
+          presets={studio.presets}
+          activePreset={studio.activePreset}
+          onApplyPreset={studio.applyPreset}
+          onSavePreset={studio.saveActivePreset}
+          onResetPreset={studio.resetToRegular}
         />
 
         <main className="min-w-0 flex-1 overflow-hidden p-4">

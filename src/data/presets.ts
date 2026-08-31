@@ -207,14 +207,3 @@ export function presetsFromJson(text: string): ParsedPresetFile {
   const active = typeof container.active === 'string' ? container.active : null;
   return { presets, active: active && presets[active] ? active : null };
 }
-
-/** Compact parameter summary shown under each gallery card. */
-export function summarizeParams(p: StyleParams): string {
-  return [
-    `rx ${p.rx.toFixed(0)}`,
-    `ry ${p.ry.toFixed(0)}`,
-    `∠ ${p.moduleAngle.toFixed(0)}°`,
-    `step ${p.stepX.toFixed(0)}/${p.stepY.toFixed(0)}`,
-    `slant ${p.slantAngle.toFixed(0)}°`,
-  ].join(' · ');
-}

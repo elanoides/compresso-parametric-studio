@@ -1,10 +1,10 @@
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 
 export type ButtonVariant = 'default' | 'primary' | 'inverted' | 'danger' | 'ghost';
 
 interface ButtonProps {
   children: ReactNode;
-  onClick?: () => void;
+  onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
   variant?: ButtonVariant;
   disabled?: boolean;
   title?: string;

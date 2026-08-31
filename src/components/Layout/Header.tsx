@@ -18,7 +18,7 @@ export function Header({
     <header className="flex shrink-0 flex-col gap-2 border-b border-studio-border bg-studio-bg px-4 pt-3">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h1 className="text-[15px] font-semibold tracking-tight text-studio-text">
-          CRT Parametric Font Studio
+          Compresso Parametric Font Studio
         </h1>
         <p className="font-mono text-[11px] text-studio-faint">
           Активное начертание: <span className="text-studio-muted">{activePreset}</span>

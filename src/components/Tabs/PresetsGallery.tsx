@@ -4,12 +4,7 @@ import { Button } from '../controls/Button';
 import { Select, TextField } from '../controls/Inputs';
 import { Modal } from '../Modal';
 import { SvgCanvas } from '../SvgCanvas';
-import {
-  BUILTIN_PRESET_NAMES,
-  presetsFromJson,
-  presetsToJson,
-  summarizeParams,
-} from '../../data/presets';
+import { BUILTIN_PRESET_NAMES, presetsFromJson, presetsToJson } from '../../data/presets';
 import { downloadJson, readTextFile } from '../../engine/download';
 import { renderTextSvg } from '../../engine/geometry';
 import { usePresetContext } from '../../hooks/usePresetContext';
@@ -227,18 +222,24 @@ const PresetCard = memo(function PresetCard({
   const context = usePresetContext(cardParams);
 
   const svg = useMemo(
-    () => (context ? renderTextSvg(specimen, context, 1) : ''),
+    () =>
+      context
+        ? renderTextSvg(specimen, context, 1, { paintBackground: false, contain: true })
+        : '',
     [context, specimen],
   );
+
+  const apply = () => onApply(name);
 
   return (
     <article
       className={
-        'flex flex-col gap-2.5 rounded-lg border p-3 transition-colors ' +
+        'flex cursor-pointer flex-col gap-2.5 rounded-lg border p-3 text-left transition-colors ' +
         (active
           ? 'border-white bg-white'
           : 'border-studio-border bg-studio-surface hover:border-studio-border-strong')
       }
+      onClick={apply}
     >
       <div className="flex items-baseline justify-between gap-2">
         <h3
@@ -258,33 +259,29 @@ const PresetCard = memo(function PresetCard({
 
       <div
         className={
-          'flex h-[104px] items-center justify-center overflow-hidden rounded ' +
-          (active ? 'bg-white' : 'bg-studio-bg')
+          'h-[104px] w-full overflow-hidden rounded ' + (active ? 'bg-white' : 'bg-studio-bg')
         }
       >
         {svg ? (
           <SvgCanvas svg={svg} fluid />
         ) : (
-          <span className="text-[10px] text-studio-faint">загрузка контуров…</span>
+          <span className="flex h-full items-center justify-center text-[10px] text-studio-faint">
+            загрузка контуров…
+          </span>
         )}
       </div>
-
-      <p
-        className={
-          'font-mono text-[10px] leading-snug ' + (active ? 'text-[#4a4a4a]' : 'text-studio-faint')
-        }
-      >
-        {summarizeParams(params)}
-      </p>
 
       <div className="mt-auto flex gap-1.5">
         <Button
           fullWidth
           compact
           variant={active ? 'inverted' : 'default'}
-          onClick={() => onApply(name)}
+          onClick={(event) => {
+            event.stopPropagation();
+            apply();
+          }}
         >
-          Загрузить в редактор
+          Скопировать в редактор
         </Button>
         <Button
           compact
@@ -295,7 +292,10 @@ const PresetCard = memo(function PresetCard({
               ? `Удалить начертание ${name}`
               : 'Заводское начертание нельзя удалить'
           }
-          onClick={() => onRequestDelete(name)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRequestDelete(name);
+          }}
         >
           Удалить
         </Button>

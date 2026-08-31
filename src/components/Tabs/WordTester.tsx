@@ -38,7 +38,10 @@ export function WordTester({
   const deferredScale = useDeferredValue(previewScale);
 
   const svg = useMemo(
-    () => renderTextSvg(deferredText, deferredContext, deferredScale),
+    () =>
+      renderTextSvg(deferredText, deferredContext, deferredScale, {
+        paintBackground: false,
+      }),
     [deferredText, deferredContext, deferredScale],
   );
 
@@ -125,8 +128,11 @@ export function WordTester({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-lg border border-studio-border bg-studio-panel p-4">
-        <SvgCanvas svg={svg} />
+      <div
+        className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-lg border border-studio-border"
+        style={{ backgroundColor: context.params.background }}
+      >
+        <SvgCanvas svg={svg} className="p-4" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

@@ -12,6 +12,7 @@ export const READABLE_CHAR_POOL =
 
 /**
  * Circle- or dot-like at module scale — indistinguishable from a plain oval,
- * so they are never used as font modules.
+ * so they are never used as font modules. Latin/Cyrillic «О» and digit «0»
+ * stay in the pool: they remain readable at module scale.
  */
-export const RANDOM_EXCLUDED_CHARS = new Set('O0QОo.°,;·•●◦∙');
+export const RANDOM_EXCLUDED_CHARS = new Set('Qq.°,;·•●◦∙');

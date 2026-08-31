@@ -35,11 +35,33 @@ interface SidebarProps {
   onChange: (patch: Partial<StyleParams>) => void;
   fontLoading: boolean;
   fontError: string | null;
+  presets: Record<string, StyleParams>;
+  activePreset: string;
+  onApplyPreset: (name: string) => void;
+  onSavePreset: () => void;
+  onResetPreset: () => void;
 }
 
-export function Sidebar({ params, onChange, fontLoading, fontError }: SidebarProps) {
+export function Sidebar({
+  params,
+  onChange,
+  fontLoading,
+  fontError,
+  presets,
+  activePreset,
+  onApplyPreset,
+  onSavePreset,
+  onResetPreset,
+}: SidebarProps) {
   return (
     <aside className="flex w-[300px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-studio-border bg-studio-bg p-3">
+      <PresetDock
+        names={Object.keys(presets)}
+        activePreset={activePreset}
+        onApply={onApplyPreset}
+        onSave={onSavePreset}
+        onReset={onResetPreset}
+      />
       <ModuleSection
         params={params}
         onChange={onChange}
@@ -54,9 +76,49 @@ export function Sidebar({ params, onChange, fontLoading, fontError }: SidebarPro
   );
 }
 
+interface StyleSectionProps {
+  params: StyleParams;
+  onChange: (patch: Partial<StyleParams>) => void;
+  fontLoading: boolean;
+  fontError: string | null;
+}
+
+function PresetDock({
+  names,
+  activePreset,
+  onApply,
+  onSave,
+  onReset,
+}: {
+  names: readonly string[];
+  activePreset: string;
+  onApply: (name: string) => void;
+  onSave: () => void;
+  onReset: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-studio-border bg-studio-surface p-2.5">
+      <Select
+        label="Начертание"
+        value={activePreset}
+        options={names}
+        onChange={onApply}
+      />
+      <div className="mt-2 grid grid-cols-2 gap-1.5">
+        <Button compact onClick={onSave} title="Перезаписать активное начертание текущими параметрами">
+          Сохранить
+        </Button>
+        <Button compact onClick={onReset} title="Вернуть параметры Regular">
+          Сбросить к Regular
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 
-function ModuleSection({ params, onChange, fontLoading, fontError }: SidebarProps) {
+function ModuleSection({ params, onChange, fontLoading, fontError }: StyleSectionProps) {
   return (
     <Accordion title="Модуль" defaultOpen>
       <RadioGroup<ModuleType>
@@ -210,7 +272,7 @@ function CustomSvgUpload({
   );
 }
 
-function FontModuleControls({ params, onChange, fontLoading, fontError }: SidebarProps) {
+function FontModuleControls({ params, onChange, fontLoading, fontError }: StyleSectionProps) {
   const weights = weightsForSubfamily(params.moduleFontSubfamily);
 
   const handleSubfamily = useCallback(
