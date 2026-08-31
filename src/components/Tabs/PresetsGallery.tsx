@@ -1,4 +1,5 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { Copy } from 'lucide-react';
 
 import { Button } from '../controls/Button';
 import { Select, TextField } from '../controls/Inputs';
@@ -7,6 +8,7 @@ import { SvgCanvas } from '../SvgCanvas';
 import {
   BUILTIN_PRESET_NAMES,
   DEFAULT_PHRASE,
+  nextPresetName,
   presetsFromJson,
   presetsToJson,
 } from '../../data/presets';
@@ -29,7 +31,7 @@ interface PresetsGalleryProps {
   context: RenderContext;
   onApply: (name: string) => void;
   onSave: () => void;
-  onCreate: (name: string) => string | null;
+  onCreate: (name: string, source?: StyleParams, activate?: boolean) => string | null;
   onCreateDefault: (name: string) => string | null;
   onDelete: (name: string) => void;
   onReset: () => void;
@@ -55,26 +57,51 @@ export function PresetsGallery({
   const importRef = useRef<HTMLInputElement>(null);
 
   const names = useMemo(() => Object.keys(presets), [presets]);
+  const suggestedName = useMemo(() => nextPresetName(names), [names]);
+
+  const resolveName = useCallback(
+    () => newName.trim() || nextPresetName(names),
+    [names, newName],
+  );
 
   const handleCreate = useCallback(() => {
-    const error = onCreate(newName);
+    const name = resolveName();
+    const error = onCreate(name);
     if (error) {
       setMessage(error);
       return;
     }
-    setMessage(`Начертание «${newName.trim()}» создано`);
+    setMessage(`Начертание «${name}» создано и стало активным`);
     setNewName('');
-  }, [newName, onCreate]);
+  }, [onCreate, resolveName]);
 
   const handleCreateDefault = useCallback(() => {
-    const error = onCreateDefault(newName);
+    const name = resolveName();
+    const error = onCreateDefault(name);
     if (error) {
       setMessage(error);
       return;
     }
-    setMessage(`Начертание «${newName.trim()}» создано с настройками Regular`);
+    setMessage(`Начертание «${name}» создано с настройками Regular`);
     setNewName('');
-  }, [newName, onCreateDefault]);
+  }, [onCreateDefault, resolveName]);
+
+  const handleCopyCard = useCallback(
+    (sourceName: string) => {
+      const source = presets[sourceName];
+      if (!source) {
+        return;
+      }
+      const name = nextPresetName(names);
+      const error = onCreate(name, source, false);
+      if (error) {
+        setMessage(error);
+        return;
+      }
+      setMessage(`Настройки «${sourceName}» скопированы в «${name}»`);
+    },
+    [names, onCreate, presets],
+  );
 
   const handleSave = useCallback(() => {
     onSave();
@@ -191,7 +218,7 @@ export function PresetsGallery({
           <TextField
             label="Имя нового начертания"
             value={newName}
-            placeholder="например Wide Bold"
+            placeholder={suggestedName}
             onChange={setNewName}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
@@ -217,6 +244,7 @@ export function PresetsGallery({
               active={name === activePreset}
               deletable={!BUILTIN_PRESET_NAMES.includes(name)}
               onApply={onApply}
+              onCopy={handleCopyCard}
               onRequestDelete={setPendingDelete}
             />
           ))}
@@ -281,6 +309,7 @@ interface PresetCardProps {
   active: boolean;
   deletable: boolean;
   onApply: (name: string) => void;
+  onCopy: (name: string) => void;
   onRequestDelete: (name: string) => void;
 }
 
@@ -291,6 +320,7 @@ const PresetCard = memo(function PresetCard({
   active,
   deletable,
   onApply,
+  onCopy,
   onRequestDelete,
 }: PresetCardProps) {
   const cardParams = useMemo<StyleParams>(
@@ -357,15 +387,15 @@ const PresetCard = memo(function PresetCard({
 
       <div className="mt-auto flex gap-1.5">
         <Button
-          fullWidth
           compact
           variant={active ? 'inverted' : 'default'}
+          title="Скопировать настройки"
           onClick={(event) => {
             event.stopPropagation();
-            apply();
+            onCopy(name);
           }}
         >
-          Скопировать в редактор
+          <Copy size={14} aria-hidden />
         </Button>
         <Button
           compact

@@ -39,8 +39,9 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-label={title}
       className={
-        'rounded border text-[12px] whitespace-nowrap transition-colors ' +
+        'inline-flex items-center justify-center rounded border text-[12px] whitespace-nowrap transition-colors ' +
         'disabled:cursor-not-allowed disabled:opacity-40 ' +
         (compact ? 'px-2 py-1.5 ' : 'px-3 py-2 ') +
         (fullWidth ? 'w-full ' : '') +

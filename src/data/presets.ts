@@ -71,6 +71,22 @@ export const BUILTIN_PRESET_NAMES: readonly string[] = Object.keys(DEFAULT_PRESE
 export const DEFAULT_PRESET_NAME = 'Regular';
 export const DEFAULT_PHRASE = 'НОБЕЛЬФАЙК';
 
+/** Same ladder as CSS / OS/2 usWeightClass: 100, 200, 300… */
+export const PRESET_WEIGHT_STEP = 100;
+
+/**
+ * Next free style name on the weight ladder: 100, then 200, then 300.
+ * Factory names like Regular stay as they are; user styles get the numbers.
+ */
+export function nextPresetName(existingNames: readonly string[]): string {
+  const taken = new Set(existingNames);
+  let weight = PRESET_WEIGHT_STEP;
+  while (taken.has(String(weight))) {
+    weight += PRESET_WEIGHT_STEP;
+  }
+  return String(weight);
+}
+
 /** Specimen used for preview and export when the text field is empty. */
 export function resolveSpecimen(text: string): string {
   const trimmed = text.trim();

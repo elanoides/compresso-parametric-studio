@@ -101,10 +101,19 @@ export function resolveStyleMetrics(style: string): StyleMetrics {
   );
 
   let weightClass = 400;
-  for (const [token, value] of WEIGHT_BY_TOKEN) {
-    if (tokens.has(token)) {
-      weightClass = value;
-      break;
+  const numericName = Number(style.trim());
+  if (
+    /^\d+$/.test(style.trim()) &&
+    Number.isInteger(numericName) &&
+    numericName >= 1
+  ) {
+    weightClass = Math.min(1000, numericName);
+  } else {
+    for (const [token, value] of WEIGHT_BY_TOKEN) {
+      if (tokens.has(token)) {
+        weightClass = value;
+        break;
+      }
     }
   }
 
