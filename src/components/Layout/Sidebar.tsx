@@ -56,8 +56,8 @@ export function Sidebar({
   onCreatePreset,
 }: SidebarProps) {
   return (
-    <aside className="flex w-[300px] shrink-0 flex-col border-r border-studio-border bg-studio-bg">
-      <div className="shrink-0 p-3 pb-2">
+    <aside className="custom-scrollbar flex h-full w-[320px] shrink-0 flex-col overflow-y-auto border-r border-neutral-800 bg-[#0d0d0d] p-4">
+      <div className="sticky top-0 z-10 shrink-0 bg-[#0d0d0d] pb-2">
         <PresetDock
           names={Object.keys(presets)}
           activePreset={activePreset}
@@ -67,7 +67,7 @@ export function Sidebar({
           onCreate={onCreatePreset}
         />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-3">
+      <div className="flex shrink-0 flex-col gap-2">
         <ModuleSection
           params={params}
           onChange={onChange}

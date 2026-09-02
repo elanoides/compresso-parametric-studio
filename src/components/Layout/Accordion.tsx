@@ -11,7 +11,7 @@ export function Accordion({ title, children, defaultOpen = false }: AccordionPro
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <section className="overflow-hidden rounded-lg border border-studio-border bg-studio-surface">
+    <section className="shrink-0 overflow-hidden rounded-lg border border-studio-border bg-studio-surface">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}

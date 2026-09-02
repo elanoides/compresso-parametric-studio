@@ -17,7 +17,7 @@ export default function App() {
         presetCount={Object.keys(studio.presets).length}
       />
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 w-full flex-1 overflow-hidden">
         <Sidebar
           params={studio.params}
           onChange={studio.updateParams}
